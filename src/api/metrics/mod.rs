@@ -1,5 +1,4 @@
 //! # OpenTelemetry Metrics API
-//!
 //! The user-facing metrics API supports producing diagnostic measurements
 //! using three basic kinds of instrument. "Metrics" are the thing being
 //! produced--mathematical, statistical summaries of certain observable
@@ -58,14 +57,13 @@ use crate::api;
 use std::sync::Arc;
 
 pub mod counter;
-pub mod gauge;
 pub mod measure;
+pub mod meter;
 pub mod noop;
+pub mod observer;
 pub mod value;
 
-use counter::Counter;
-use gauge::Gauge;
-use measure::Measure;
+pub use meter::Meter;
 use value::MeasurementValue;
 
 /// The implementation-level interface to Set/Add/Record individual
@@ -173,75 +171,9 @@ impl<LS: LabelSet> Measurement<LS> {
     }
 }
 
-/// Meter is an interface to the metrics portion of the OpenTelemetry SDK.
-///
-/// The Meter interface allows creating of a registered metric instrument using methods specific to
-/// each kind of metric. There are six constructors representing the three kinds of instrument
-/// taking either floating point or integer inputs, see the detailed design below.
-///
-/// Binding instruments to a single Meter instance has two benefits:
-///
-///    1. Instruments can be exported from the zero state, prior to first use, with no explicit
-///       Register call
-///    2. The component name provided by the named Meter satisfies a namespace requirement
-///
-/// The recommended practice is to define structures to contain the instruments in use and keep
-/// references only to the instruments that are specifically needed.
-///
-/// We recognize that many existing metric systems support allocating metric instruments statically
-/// and providing the Meter interface at the time of use. In this example, typical of statsd
-/// clients, existing code may not be structured with a convenient place to store new metric
-/// instruments. Where this becomes a burden, it is recommended to use the global meter factory to
-/// construct a static named Meter, to construct metric instruments.
-///
-/// The situation is similar for users of Prometheus clients, where instruments are allocated
-/// statically and there is an implicit global. Such code may not have access to the appropriate
-/// Meter where instruments are defined. Where this becomes a burden, it is recommended to use the
-/// global meter factory to construct a static named Meter, to construct metric instruments.
-///
-/// Applications are expected to construct long-lived instruments. Instruments are considered
-/// permanent for the lifetime of a SDK, there is no method to delete them.
-pub trait Meter {
-    /// The `LabelSet` data type for this meter.
-    type LabelSet: LabelSet;
-    /// The `I64Counter` data type for this meter.
-    type I64Counter: Counter<i64, Self::LabelSet>;
-    /// The `F64Counter` data type for this meter.
-    type F64Counter: Counter<f64, Self::LabelSet>;
-    /// The `I64Gauge` data type for this meter.
-    type I64Gauge: Gauge<i64, Self::LabelSet>;
-    /// The `F64Gauge` data type for this meter.
-    type F64Gauge: Gauge<f64, Self::LabelSet>;
-    /// The `I64Measure` data type for this meter.
-    type I64Measure: Measure<i64, Self::LabelSet>;
-    /// The `F64Measure` data type for this meter.
-    type F64Measure: Measure<f64, Self::LabelSet>;
-
-    /// Returns a reference to a set of labels that cannot be read by the application.
-    fn labels(&self, key_values: Vec<api::KeyValue>) -> Self::LabelSet;
-
-    /// Creates a new `i64` counter with a given name and customized with passed options.
-    fn new_i64_counter<S: Into<String>>(&self, name: S, opts: MetricOptions) -> Self::I64Counter;
-
-    /// Creates a new `f64` counter with a given name and customized with passed options.
-    fn new_f64_counter<S: Into<String>>(&self, name: S, opts: MetricOptions) -> Self::F64Counter;
-
-    /// Creates a new `i64` gauge with a given name and customized with passed options.
-    fn new_i64_gauge<S: Into<String>>(&self, name: S, opts: MetricOptions) -> Self::I64Gauge;
-
-    /// Creates a new `f64` gauge with a given name and customized with passed options.
-    fn new_f64_gauge<S: Into<String>>(&self, name: S, opts: MetricOptions) -> Self::F64Gauge;
-
-    /// Creates a new `i64` measure with a given name and customized with passed options.
-    fn new_i64_measure<S: Into<String>>(&self, name: S, opts: MetricOptions) -> Self::I64Measure;
-
-    /// Creates a new `f64` measure with a given name and customized with passed options.
-    fn new_f64_measure<S: Into<String>>(&self, name: S, opts: MetricOptions) -> Self::F64Measure;
-
-    /// Atomically records a batch of measurements.
-    fn record_batch<M: IntoIterator<Item = Measurement<Self::LabelSet>>>(
-        &self,
-        label_set: &Self::LabelSet,
-        measurements: M,
-    );
+/// Metric Errors
+#[derive(Debug)]
+pub enum Error {
+    /// TODO
+    Tmp(String),
 }

@@ -9,8 +9,8 @@
 //! `Meter` struct, used for recording metrics. There are three distinct
 //! instruments in the Metrics API, commonly known as `Counter`s, `Gauge`s,
 //! and `Measure`s.
-use crate::api;
 use crate::exporter::metrics::prometheus;
+use crate::{api, api::metrics::Error};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -63,9 +63,9 @@ impl api::Meter for Meter {
     /// This implementation of `api::Meter` produces `prometheus::CounterVec;` instances.
     type F64Counter = prometheus::CounterVec;
     /// This implementation of `api::Meter` produces `prometheus::IntGaugeVec;` instances.
-    type I64Gauge = prometheus::IntGaugeVec;
+    type I64Observer = prometheus::IntGaugeVec;
     /// This implementation of `api::Meter` produces `prometheus::GaugeVec;` instances.
-    type F64Gauge = prometheus::GaugeVec;
+    type F64Observer = prometheus::GaugeVec;
     /// This implementation of `api::Meter` produces `prometheus::IntMeasure;` instances.
     type I64Measure = prometheus::IntMeasure;
     /// This implementation of `api::Meter` produces `prometheus::HistogramVec;` instances.
@@ -87,7 +87,7 @@ impl api::Meter for Meter {
         &self,
         name: S,
         opts: api::MetricOptions,
-    ) -> Self::I64Counter {
+    ) -> Result<Self::I64Counter, Error> {
         let api::MetricOptions {
             description,
             unit,
@@ -96,10 +96,10 @@ impl api::Meter for Meter {
         } = opts;
         let counter_opts = self.build_opts(name.into(), unit, description);
         let labels = prometheus::convert_labels(&keys);
-        let counter = prometheus::IntCounterVec::new(counter_opts, &labels).unwrap();
-        self.registry.register(Box::new(counter.clone())).unwrap();
+        let counter = prometheus::IntCounterVec::new(counter_opts, &labels)?;
+        self.registry.register(Box::new(counter.clone()))?;
 
-        counter
+        Ok(counter)
     }
 
     /// Creates a new `f64` counter with a given name and customized with passed options.
@@ -107,7 +107,7 @@ impl api::Meter for Meter {
         &self,
         name: S,
         opts: api::MetricOptions,
-    ) -> Self::F64Counter {
+    ) -> Result<Self::F64Counter, Error> {
         let api::MetricOptions {
             description,
             unit,
@@ -116,14 +116,18 @@ impl api::Meter for Meter {
         } = opts;
         let counter_opts = self.build_opts(name.into(), unit, description);
         let labels = prometheus::convert_labels(&keys);
-        let counter = prometheus::CounterVec::new(counter_opts, &labels).unwrap();
-        self.registry.register(Box::new(counter.clone())).unwrap();
+        let counter = prometheus::CounterVec::new(counter_opts, &labels)?;
+        self.registry.register(Box::new(counter.clone()))?;
 
-        counter
+        Ok(counter)
     }
 
     /// Creates a new `i64` gauge with a given name and customized with passed options.
-    fn new_i64_gauge<S: Into<String>>(&self, name: S, opts: api::MetricOptions) -> Self::I64Gauge {
+    fn new_i64_observer<S: Into<String>>(
+        &self,
+        name: S,
+        opts: api::MetricOptions,
+    ) -> Result<Self::I64Observer, Error> {
         let api::MetricOptions {
             description,
             unit,
@@ -132,14 +136,18 @@ impl api::Meter for Meter {
         } = opts;
         let gauge_opts = self.build_opts(name.into(), unit, description);
         let labels = prometheus::convert_labels(&keys);
-        let gauge = prometheus::IntGaugeVec::new(gauge_opts, &labels).unwrap();
-        self.registry.register(Box::new(gauge.clone())).unwrap();
+        let gauge = prometheus::IntGaugeVec::new(gauge_opts, &labels)?;
+        self.registry.register(Box::new(gauge.clone()))?;
 
-        gauge
+        Ok(gauge)
     }
 
     /// Creates a new `f64` gauge with a given name and customized with passed options.
-    fn new_f64_gauge<S: Into<String>>(&self, name: S, opts: api::MetricOptions) -> Self::F64Gauge {
+    fn new_f64_observer<S: Into<String>>(
+        &self,
+        name: S,
+        opts: api::MetricOptions,
+    ) -> Result<Self::F64Observer, Error> {
         let api::MetricOptions {
             description,
             unit,
@@ -148,10 +156,10 @@ impl api::Meter for Meter {
         } = opts;
         let gauge_opts = self.build_opts(name.into(), unit, description);
         let labels = prometheus::convert_labels(&keys);
-        let gauge = prometheus::GaugeVec::new(gauge_opts, &labels).unwrap();
-        self.registry.register(Box::new(gauge.clone())).unwrap();
+        let gauge = prometheus::GaugeVec::new(gauge_opts, &labels)?;
+        self.registry.register(Box::new(gauge.clone()))?;
 
-        gauge
+        Ok(gauge)
     }
 
     /// Creates a new `i64` measure with a given name and customized with passed options.
@@ -159,7 +167,7 @@ impl api::Meter for Meter {
         &self,
         name: S,
         opts: api::MetricOptions,
-    ) -> Self::I64Measure {
+    ) -> Result<Self::I64Measure, Error> {
         let api::MetricOptions {
             description,
             unit,
@@ -169,10 +177,10 @@ impl api::Meter for Meter {
         let common_opts = self.build_opts(name.into(), unit, description);
         let labels = prometheus::convert_labels(&keys);
         let histogram_opts = prometheus::HistogramOpts::from(common_opts);
-        let histogram = prometheus::HistogramVec::new(histogram_opts, &labels).unwrap();
-        self.registry.register(Box::new(histogram.clone())).unwrap();
+        let histogram = prometheus::HistogramVec::new(histogram_opts, &labels)?;
+        self.registry.register(Box::new(histogram.clone()))?;
 
-        prometheus::IntMeasure::new(histogram)
+        Ok(prometheus::IntMeasure::new(histogram))
     }
 
     /// Creates a new `f64` measure with a given name and customized with passed options.
@@ -180,7 +188,7 @@ impl api::Meter for Meter {
         &self,
         name: S,
         opts: api::MetricOptions,
-    ) -> Self::F64Measure {
+    ) -> Result<Self::F64Measure, Error> {
         let api::MetricOptions {
             description,
             unit,
@@ -190,10 +198,10 @@ impl api::Meter for Meter {
         let common_opts = self.build_opts(name.into(), unit, description);
         let labels = prometheus::convert_labels(&keys);
         let histogram_opts = prometheus::HistogramOpts::from(common_opts);
-        let histogram = prometheus::HistogramVec::new(histogram_opts, &labels).unwrap();
-        self.registry.register(Box::new(histogram.clone())).unwrap();
+        let histogram = prometheus::HistogramVec::new(histogram_opts, &labels)?;
+        self.registry.register(Box::new(histogram.clone()))?;
 
-        histogram
+        Ok(histogram)
     }
 
     /// Records a batch of measurements.

@@ -21,13 +21,13 @@ use crate::api::metrics;
 
 /// An interface for recording values where the metric cannot be expressed
 /// as a sum or because the measurement interval is arbitrary.
-pub trait Gauge<T, LS>: metrics::Instrument<LS>
+pub trait Observer<T, LS>: metrics::Instrument<LS>
 where
     T: Into<metrics::value::MeasurementValue>,
     LS: metrics::LabelSet,
 {
     /// The handle type for the implementing `Gauge`.
-    type Handle: GaugeHandle<T>;
+    type Handle: ObserverHandle<T>;
 
     /// Creates a `Measurement` object to be used by a `Meter` when batch recording.
     fn measurement(&self, value: T) -> metrics::Measurement<LS>;
@@ -53,7 +53,7 @@ where
 /// `GaugeHandle` is a handle for `Gauge` instances.
 ///
 /// It allows for repeated `set` calls for a pre-determined `LabelSet`.
-pub trait GaugeHandle<T>: metrics::InstrumentHandle
+pub trait ObserverHandle<T>: metrics::InstrumentHandle
 where
     T: Into<metrics::value::MeasurementValue>,
 {

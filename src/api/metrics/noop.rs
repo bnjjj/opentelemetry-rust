@@ -3,6 +3,7 @@
 //! This implementation is returned as the global Meter if no `Meter`
 //! has been set. It is also useful for testing purposes as it is intended
 //! to have minimal resource utilization and runtime impact.
+use super::Error;
 use crate::api;
 use std::marker;
 use std::sync::Arc;
@@ -15,8 +16,8 @@ impl api::Meter for NoopMeter {
     type LabelSet = NoopLabelSet;
     type I64Counter = NoopCounter<i64>;
     type F64Counter = NoopCounter<f64>;
-    type I64Gauge = NoopGauge<i64>;
-    type F64Gauge = NoopGauge<f64>;
+    type I64Observer = NoopObserver<i64>;
+    type F64Observer = NoopObserver<f64>;
     type I64Measure = NoopMeasure<i64>;
     type F64Measure = NoopMeasure<f64>;
 
@@ -30,10 +31,10 @@ impl api::Meter for NoopMeter {
         &self,
         _name: S,
         _opts: api::MetricOptions,
-    ) -> Self::I64Counter {
-        NoopCounter {
+    ) -> Result<Self::I64Counter, Error> {
+        Ok(NoopCounter {
             _marker: marker::PhantomData,
-        }
+        })
     }
 
     /// Returns a no-op `F64Counter` instance.
@@ -41,32 +42,32 @@ impl api::Meter for NoopMeter {
         &self,
         _name: S,
         _opts: api::MetricOptions,
-    ) -> Self::F64Counter {
-        NoopCounter {
+    ) -> Result<Self::F64Counter, Error> {
+        Ok(NoopCounter {
             _marker: marker::PhantomData,
-        }
+        })
     }
 
     /// Returns a no-op `I64Gauge` instance.
-    fn new_i64_gauge<S: Into<String>>(
+    fn new_i64_observer<S: Into<String>>(
         &self,
         _name: S,
         _opts: api::MetricOptions,
-    ) -> Self::I64Gauge {
-        NoopGauge {
+    ) -> Result<Self::I64Observer, Error> {
+        Ok(NoopObserver {
             _marker: marker::PhantomData,
-        }
+        })
     }
 
     /// Returns a no-op `F64Gauge` instance.
-    fn new_f64_gauge<S: Into<String>>(
+    fn new_f64_observer<S: Into<String>>(
         &self,
         _name: S,
         _opts: api::MetricOptions,
-    ) -> Self::F64Gauge {
-        NoopGauge {
+    ) -> Result<Self::F64Observer, Error> {
+        Ok(NoopObserver {
             _marker: marker::PhantomData,
-        }
+        })
     }
 
     /// Returns a no-op `I64Measure` instance.
@@ -74,10 +75,10 @@ impl api::Meter for NoopMeter {
         &self,
         _name: S,
         _opts: api::MetricOptions,
-    ) -> Self::I64Measure {
-        NoopMeasure {
+    ) -> Result<Self::I64Measure, Error> {
+        Ok(NoopMeasure {
             _marker: marker::PhantomData,
-        }
+        })
     }
 
     /// Returns a no-op `F64Measure` instance.
@@ -85,10 +86,10 @@ impl api::Meter for NoopMeter {
         &self,
         _name: S,
         _opts: api::MetricOptions,
-    ) -> Self::F64Measure {
-        NoopMeasure {
+    ) -> Result<Self::F64Measure, Error> {
+        Ok(NoopMeasure {
             _marker: marker::PhantomData,
-        }
+        })
     }
 
     /// Ignores batch recordings
@@ -121,7 +122,7 @@ impl<T> api::Instrument<NoopLabelSet> for NoopHandle<T> {
 
 impl<T> api::CounterHandle<T> for NoopHandle<T> where T: Into<api::MeasurementValue> {}
 
-impl<T> api::GaugeHandle<T> for NoopHandle<T> where T: Into<api::MeasurementValue> {}
+impl<T> api::ObserverHandle<T> for NoopHandle<T> where T: Into<api::MeasurementValue> {}
 
 impl<T> api::MeasureHandle<T> for NoopHandle<T> where T: Into<api::MeasurementValue> {}
 
@@ -160,11 +161,11 @@ impl<T> api::Instrument<NoopLabelSet> for NoopCounter<T> {
 
 /// A no-op instance of a `Gauge`.
 #[derive(Clone, Debug)]
-pub struct NoopGauge<T> {
+pub struct NoopObserver<T> {
     _marker: marker::PhantomData<T>,
 }
 
-impl api::Gauge<i64, NoopLabelSet> for NoopGauge<i64> {
+impl api::Observer<i64, NoopLabelSet> for NoopObserver<i64> {
     type Handle = NoopHandle<i64>;
 
     /// Returns a no-op `Measurement`.
@@ -184,7 +185,7 @@ impl api::Gauge<i64, NoopLabelSet> for NoopGauge<i64> {
     }
 }
 
-impl api::Gauge<f64, NoopLabelSet> for NoopGauge<f64> {
+impl api::Observer<f64, NoopLabelSet> for NoopObserver<f64> {
     type Handle = NoopHandle<f64>;
 
     /// Returns a no-op `Measurement`.
@@ -211,7 +212,7 @@ impl<T> api::InstrumentHandle for NoopHandle<T> {
     }
 }
 
-impl<T> api::Instrument<NoopLabelSet> for NoopGauge<T> {
+impl<T> api::Instrument<NoopLabelSet> for NoopObserver<T> {
     /// Ignores all measurement values and labels.
     fn record_one(&self, _value: api::MeasurementValue, _labels: &NoopLabelSet) {
         // Ignored

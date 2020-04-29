@@ -1,6 +1,6 @@
 use opentelemetry::api::{
-    Context, CorrelationContextExt, Gauge, GaugeHandle, Key, Measure, MeasureHandle, Meter,
-    MetricOptions, TraceContextExt, Tracer,
+    Context, CorrelationContextExt, Key, Measure, MeasureHandle, Meter, MetricOptions, Observer,
+    ObserverHandle, TraceContextExt, Tracer,
 };
 use opentelemetry::{global, sdk};
 

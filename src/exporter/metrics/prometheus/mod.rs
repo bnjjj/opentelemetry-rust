@@ -109,7 +109,7 @@ impl api::CounterHandle<f64> for CounterHandle {}
 #[allow(missing_debug_implementations)]
 pub struct IntGaugeHandle(prometheus::IntGauge);
 
-impl api::Gauge<i64, sdk::LabelSet> for prometheus::IntGaugeVec {
+impl api::Observer<i64, sdk::LabelSet> for prometheus::IntGaugeVec {
     type Handle = IntGaugeHandle;
 
     /// Creates a `Measurement` object to be used by a `Meter` when batch recording.
@@ -138,14 +138,14 @@ impl api::InstrumentHandle for IntGaugeHandle {
     }
 }
 
-impl api::GaugeHandle<i64> for IntGaugeHandle {}
+impl api::ObserverHandle<i64> for IntGaugeHandle {}
 
 /// Prometheus GaugeHandle
 #[derive(Clone)]
 #[allow(missing_debug_implementations)]
 pub struct GaugeHandle(prometheus::Gauge);
 
-impl api::Gauge<f64, sdk::LabelSet> for prometheus::GaugeVec {
+impl api::Observer<f64, sdk::LabelSet> for prometheus::GaugeVec {
     type Handle = GaugeHandle;
 
     /// Creates a `Measurement` object to be used by a `Meter` when batch recording.
@@ -174,7 +174,7 @@ impl api::InstrumentHandle for GaugeHandle {
     }
 }
 
-impl api::GaugeHandle<f64> for GaugeHandle {}
+impl api::ObserverHandle<f64> for GaugeHandle {}
 
 // MEASURE COMPAT
 
@@ -262,3 +262,9 @@ impl api::InstrumentHandle for MeasureHandle {
 }
 
 impl api::MeasureHandle<f64> for MeasureHandle {}
+
+impl From<prometheus::Error> for api::metrics::Error {
+    fn from(err: prometheus::Error) -> Self {
+        api::metrics::Error::Tmp(err.to_string())
+    }
+}

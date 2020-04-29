@@ -33,9 +33,9 @@ pub use correlation::{CorrelationContext, CorrelationContextExt, CorrelationCont
 
 pub use metrics::{
     counter::{Counter, CounterHandle},
-    gauge::{Gauge, GaugeHandle},
     measure::{Measure, MeasureHandle},
     noop::NoopMeter,
+    observer::{Observer, ObserverHandle},
     value::MeasurementValue,
     Instrument, InstrumentHandle, LabelSet, Measurement, Meter, MetricOptions,
 };
