@@ -84,6 +84,30 @@ pub trait InstrumentHandle {
 /// set of `KeyValue` for use as pre-defined labels in the metrics API.
 pub trait LabelSet {}
 
+pub enum InstrumentKind {
+    Measurement,
+    Observer,
+    Counter,
+}
+
+/// Contains some options for metrics of any kind.
+pub struct Config {
+    /// Description is an optional field describing the metric
+    /// instrument.
+    description: String,
+    /// Unit is an optional field describing the metric instrument.
+    unit: api::Unit,
+    /// LibraryName is the name given to the Meter that created
+    /// this instrument.  See `Provider`.
+    library_name: String,
+}
+
+pub struct Descriptor {
+    name: String,
+    kind: InstrumentKind,
+    config: Config,
+}
+
 /// `MetricOptions` contains some options for metrics of any kind.
 #[derive(Default, Debug)]
 pub struct MetricOptions {

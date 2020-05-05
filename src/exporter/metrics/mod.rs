@@ -1,2 +1,2 @@
 //! Metric exporters
-pub mod prometheus;
+// pub mod prometheus;
