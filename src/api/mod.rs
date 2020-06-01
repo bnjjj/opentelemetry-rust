@@ -16,6 +16,7 @@
 pub mod context;
 pub mod core;
 pub mod correlation;
+pub mod labels;
 pub mod metrics;
 pub mod trace;
 
@@ -31,14 +32,6 @@ pub use context::{
 };
 pub use correlation::{CorrelationContext, CorrelationContextExt, CorrelationContextPropagator};
 
-pub use metrics::{
-    counter::{Counter, CounterHandle},
-    gauge::{Gauge, GaugeHandle},
-    measure::{Measure, MeasureHandle},
-    noop::NoopMeter,
-    value::MeasurementValue,
-    Instrument, InstrumentHandle, LabelSet, Measurement, Meter, MetricOptions,
-};
 pub use trace::{
     b3_propagator::B3Propagator,
     context::TraceContextExt,

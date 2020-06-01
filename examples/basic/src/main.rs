@@ -1,7 +1,7 @@
-use opentelemetry::api::{
-    Context, CorrelationContextExt, Gauge, GaugeHandle, Key, Measure, MeasureHandle, Meter,
-    MetricOptions, TraceContextExt, Tracer,
-};
+use opentelemetry::api::metrics::{self, F64ObserverResult};
+use opentelemetry::api::{Context, CorrelationContextExt, Key, KeyValue, TraceContextExt, Tracer};
+use opentelemetry::exporter;
+use opentelemetry::sdk::metrics::PushController;
 use opentelemetry::{global, sdk};
 
 fn init_tracer() -> thrift::Result<()> {
@@ -30,36 +30,46 @@ fn init_tracer() -> thrift::Result<()> {
     Ok(())
 }
 
-fn main() -> thrift::Result<()> {
+fn init_meter() -> metrics::Result<PushController> {
+    exporter::metrics::stdout()
+        .with_quantiles(vec![0.5, 0.9, 0.99])
+        .with_pretty_print(false)
+        .try_init()
+}
+
+lazy_static::lazy_static! {
+    static ref FOO_KEY: Key = Key::new("ex.com/foo");
+    static ref BAR_KEY: Key = Key::new("ex.com/bar");
+    static ref LEMONS_KEY: Key = Key::new("ex.com/lemons");
+    static ref ANOTHER_KEY: Key = Key::new("ex.com/another");
+    static ref COMMON_LABELS: [KeyValue; 4] = [
+        LEMONS_KEY.i64(10),
+        KeyValue::new("A", "1"),
+        KeyValue::new("B", "2"),
+        KeyValue::new("C", "3"),
+    ];
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracer()?;
-    let meter = sdk::Meter::new("ex_com_basic");
+    let metrics_controller = init_meter()?;
+    let _start = metrics_controller.start();
 
-    let foo_key = Key::new("ex.com/foo");
-    let bar_key = Key::new("ex.com/bar");
-    let lemons_key = Key::new("ex_com_lemons");
-    let another_key = Key::new("ex_com_another");
+    let meter = global::meter("ex.com/basic");
 
-    let one_metric = meter.new_f64_gauge(
-        "ex_com_one",
-        MetricOptions::default()
-            .with_keys(vec![lemons_key.clone()])
-            .with_description("A gauge set to 1.0"),
-    );
+    let one_metric_callback = |res: F64ObserverResult| res.observe(1.0, COMMON_LABELS.as_ref());
+    let _ = meter
+        .f64_value_observer("ex.com.one", one_metric_callback)
+        .with_description("A ValueObserver set to 1.0")
+        .init();
 
-    let measure_two = meter.new_f64_measure(
-        "ex_com_two",
-        MetricOptions::default().with_keys(vec![lemons_key.clone()]),
-    );
-
-    let common_labels = meter.labels(vec![lemons_key.i64(10)]);
-
-    let gauge = one_metric.acquire_handle(&common_labels);
-
-    let measure = measure_two.acquire_handle(&common_labels);
+    let value_recorder_two = meter.f64_value_recorder("ex.com.two").init();
 
     let _correlations =
-        Context::current_with_correlations(vec![foo_key.string("foo1"), bar_key.string("bar1")])
+        Context::current_with_correlations(vec![FOO_KEY.string("foo1"), BAR_KEY.string("bar1")])
             .attach();
+
+    let _value_recorder = value_recorder_two.bind(COMMON_LABELS.as_ref());
 
     global::tracer("component-main").in_span("operation", move |cx| {
         let span = cx.span();
@@ -67,22 +77,22 @@ fn main() -> thrift::Result<()> {
             "Nice operation!".to_string(),
             vec![Key::new("bogons").i64(100)],
         );
-        span.set_attribute(another_key.string("yes"));
+        span.set_attribute(ANOTHER_KEY.string("yes"));
 
-        gauge.set(1.0);
-
-        meter.record_batch(
-            &common_labels,
-            vec![one_metric.measurement(1.0), measure_two.measurement(2.0)],
+        meter.record_batch_with_context(
+            // Note: call-site variables added as context Entries:
+            &Context::current_with_correlations(vec![ANOTHER_KEY.string("xyz")]),
+            COMMON_LABELS.as_ref(),
+            vec![value_recorder_two.measurement(2.0)],
         );
 
         global::tracer("component-bar").in_span("Sub operation...", move |cx| {
             let span = cx.span();
-            span.set_attribute(lemons_key.string("five"));
+            span.set_attribute(LEMONS_KEY.string("five"));
 
             span.add_event("Sub span event".to_string(), vec![]);
 
-            measure.record(1.3);
+            // value_recorder.record(1.3);
         });
     });
 

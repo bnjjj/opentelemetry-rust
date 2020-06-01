@@ -6,6 +6,7 @@
 //! facilitates the delivery of telemetry data to storage systems
 //! through `Exporter`s. These can be configured on `Tracer` and
 //! `Meter` creation.
+pub mod export;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod resource;
@@ -13,7 +14,7 @@ pub mod resource;
 pub mod trace;
 
 #[cfg(feature = "metrics")]
-pub use metrics::{LabelSet, Meter};
+// pub use metrics::{LabelSet, Meter};
 pub use resource::Resource;
 #[cfg(feature = "trace")]
 pub use trace::{

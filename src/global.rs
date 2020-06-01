@@ -12,6 +12,7 @@
 //!
 //! ```rust
 //! use opentelemetry::api::{Provider, Tracer};
+//! use opentelemetry::api::metrics::{Meter, MeterProvider};
 //! use opentelemetry::global;
 //!
 //! fn init_tracer() {
@@ -66,7 +67,11 @@
 //! [`BoxedSpan`]: struct.BoxedSpan.html
 //! [`trace_provider`]: fn.trace_provider.html
 //! [trait objects]: https://doc.rust-lang.org/reference/types/trait-object.html#trait-objects
-use crate::{api, api::Provider};
+use crate::{
+    api,
+    api::metrics::{self, Meter, MeterProvider},
+    api::Provider,
+};
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
@@ -279,10 +284,69 @@ impl api::Provider for GlobalProvider {
         BoxedTracer(self.provider.get_tracer_boxed(name))
     }
 }
+//
+// /// TODO
+// pub trait GenericMeterProvider: fmt::Debug {
+//     /// TODO
+//     fn meter_boxed(&self, name: &str) -> Box<dyn metrics::Meter>;
+// }
+
+/// TODO
+#[derive(Debug, Clone)]
+pub struct GlobalMeterProvider {
+    provider: Arc<dyn MeterProvider + Send + Sync>,
+}
+//
+// impl<P: metrics::MeterProvider + 'static> GenericMeterProvider for P {
+//     fn meter_boxed(&self, name: &str) -> Box<dyn metrics::Meter> {
+//         Box::new(self.meter(name))
+//     }
+// }
+
+// /// TODO
+// #[derive(Debug)]
+// pub struct BoxedMeter(Box<dyn metrics::Meter>);
+//
+// impl metrics::Meter for BoxedMeter {
+//     // fn new_async<T, F>(
+//     //     &self,
+//     //     name: T,
+//     //     kind: metrics::ObserverKind,
+//     //     number: metrics::NumberKind,
+//     //     callback: F,
+//     // ) -> metrics::AsyncInstrumentBuilder
+//     // where
+//     //     Self: Sized,
+//     //     T: Into<String>,
+//     //     F: Fn(metrics::F64ObserverResult),
+//     // {
+//     //     self.0.new_async(name, kind, number, callback)
+//     // }
+// }
+
+impl MeterProvider for GlobalMeterProvider {
+    fn meter(&self, name: &str) -> Meter {
+        self.provider.meter(name)
+    }
+}
+
+impl GlobalMeterProvider {
+    /// TODO
+    pub fn new<P>(provider: P) -> Self
+    where
+        P: MeterProvider + Send + Sync + 'static,
+    {
+        GlobalMeterProvider {
+            provider: Arc::new(provider),
+        }
+    }
+}
 
 lazy_static::lazy_static! {
-    /// The global `Tracer` singleton.
+    /// The global `Tracer` provider singleton.
     static ref GLOBAL_TRACER_PROVIDER: RwLock<GlobalProvider> = RwLock::new(GlobalProvider::new(api::NoopProvider {}));
+    /// The global `Meter` provider singleton.
+    static ref GLOBAL_METER_PROVIDER: RwLock<GlobalMeterProvider> = RwLock::new(GlobalMeterProvider::new(metrics::noop::NoopMeterProvider));
     /// The current global `HttpTextFormat` propagator.
     static ref GLOBAL_HTTP_TEXT_PROPAGATOR: RwLock<Box<dyn api::HttpTextFormat + Send + Sync>> = RwLock::new(Box::new(api::HttpTextCompositePropagator::new(vec![Box::new(api::TraceContextPropagator::new()), Box::new(api::CorrelationContextPropagator::new())])));
     /// The global default `HttpTextFormat` propagator.
@@ -326,6 +390,30 @@ where
         .write()
         .expect("GLOBAL_TRACER_PROVIDER RwLock poisoned");
     *global_provider = GlobalProvider::new(new_provider);
+}
+
+/// TODO
+pub fn set_meter_provider<P>(new_provider: P)
+where
+    P: api::metrics::MeterProvider + Send + Sync + 'static,
+{
+    let mut global_provider = GLOBAL_METER_PROVIDER
+        .write()
+        .expect("GLOBAL_METER_PROVIDER RwLock poisoned");
+    *global_provider = GlobalMeterProvider::new(new_provider);
+}
+
+/// TODO
+pub fn meter_provider() -> GlobalMeterProvider {
+    GLOBAL_METER_PROVIDER
+        .read()
+        .expect("GLOBAL_METER_PROVIDER RwLock poisoned")
+        .clone()
+}
+
+/// TODO
+pub fn meter(name: &str) -> Meter {
+    meter_provider().meter(name)
 }
 
 /// Sets the given [`HttpTextFormat`] propagator as the current global propagator.
@@ -376,11 +464,4 @@ where
         .read()
         .map(|propagator| f(&**propagator))
         .unwrap_or_else(|_| f(&*DEFAULT_HTTP_TEXT_PROPAGATOR as &dyn api::HttpTextFormat))
-}
-
-/// Returns [`NoopMeter`] for now
-///
-/// [`NoopMeter`]: ../api/trace/noop/struct.NoopMeter.html
-pub fn global_meter() -> crate::api::NoopMeter {
-    crate::api::NoopMeter {}
 }
