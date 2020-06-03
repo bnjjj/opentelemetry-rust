@@ -31,7 +31,7 @@ fn init_tracer() -> thrift::Result<()> {
 }
 
 fn init_meter() -> metrics::Result<PushController> {
-    exporter::metrics::stdout()
+    exporter::metrics::stdout(tokio::spawn, tokio::time::interval)
         .with_quantiles(vec![0.5, 0.9, 0.99])
         .with_pretty_print(false)
         .try_init()
@@ -50,7 +50,8 @@ lazy_static::lazy_static! {
     ];
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracer()?;
     let metrics_controller = init_meter()?;
     let _start = metrics_controller.start();
@@ -69,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Context::current_with_correlations(vec![FOO_KEY.string("foo1"), BAR_KEY.string("bar1")])
             .attach();
 
-    let _value_recorder = value_recorder_two.bind(COMMON_LABELS.as_ref());
+    let value_recorder = value_recorder_two.bind(COMMON_LABELS.as_ref());
 
     global::tracer("component-main").in_span("operation", move |cx| {
         let span = cx.span();
@@ -92,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             span.add_event("Sub span event".to_string(), vec![]);
 
-            // value_recorder.record(1.3);
+            value_recorder.record(1.3);
         });
     });
 

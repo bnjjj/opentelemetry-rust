@@ -3,52 +3,66 @@ use crate::api::labels;
 use crate::api::{metrics, metrics::MetricsError};
 use crate::global;
 use crate::sdk::{
-    export,
+    export::metrics::{CheckpointSet, Exporter},
     metrics::{
-        controllers::{self, PushController},
+        controllers::{self, PushController, PushControllerWorker},
         selectors::simple,
     },
 };
+use futures::Stream;
 use std::fmt;
 use std::io;
+use std::time;
 
 /// TODO
-pub fn stdout() -> ExporterBuilder<io::Stdout> {
-    ExporterBuilder::default()
+pub fn stdout<S, SO, I, IS, ISI>(spawn: S, interval: I) -> StdoutExporterBuilder<io::Stdout, S, I>
+where
+    S: Fn(PushControllerWorker) -> SO,
+    I: Fn(time::Duration) -> IS,
+    IS: Stream<Item = ISI> + Send + 'static,
+{
+    StdoutExporterBuilder::<io::Stdout, S, I>::new(spawn, interval)
 }
 
 /// TODO
 #[derive(Debug)]
-pub struct Exporter<W> {
+pub struct StdoutExporter<W> {
     writer: W,
     pretty_print: bool,
     do_not_print_time: bool,
     quantiles: Vec<f64>,
-    label_encoder: Box<dyn labels::Encoder>,
+    label_encoder: Box<dyn labels::Encoder + Send + Sync>,
 }
 
-impl<W: fmt::Debug> export::metrics::Exporter for Exporter<W> {
-    fn export(
-        &self,
-        checkpoint_set: &dyn export::metrics::CheckpointSet,
-    ) -> Result<(), MetricsError> {
+impl<W: fmt::Debug> Exporter for StdoutExporter<W> {
+    fn export(&self, _checkpoint_set: &dyn CheckpointSet) -> Result<(), MetricsError> {
         todo!()
     }
 }
 
 /// TODO
 #[derive(Debug)]
-pub struct ExporterBuilder<W: io::Write> {
+pub struct StdoutExporterBuilder<W, S, I> {
+    spawn: S,
+    interval: I,
     writer: W,
     pretty_print: bool,
     do_not_print_time: bool,
     quantiles: Option<Vec<f64>>,
-    label_encoder: Option<Box<dyn labels::Encoder>>,
+    label_encoder: Option<Box<dyn labels::Encoder + Send + Sync>>,
 }
 
-impl Default for ExporterBuilder<io::Stdout> {
-    fn default() -> Self {
-        ExporterBuilder {
+impl<W, S, SO, I, IS, ISI> StdoutExporterBuilder<W, S, I>
+where
+    W: io::Write + fmt::Debug + Send + Sync + 'static,
+    S: Fn(PushControllerWorker) -> SO,
+    I: Fn(time::Duration) -> IS,
+    IS: Stream<Item = ISI> + Send + 'static,
+{
+    fn new(spawn: S, interval: I) -> StdoutExporterBuilder<io::Stdout, S, I> {
+        StdoutExporterBuilder {
+            spawn,
+            interval,
             writer: io::stdout(),
             pretty_print: false,
             do_not_print_time: false,
@@ -56,15 +70,11 @@ impl Default for ExporterBuilder<io::Stdout> {
             label_encoder: None,
         }
     }
-}
-
-impl<W> ExporterBuilder<W>
-where
-    W: io::Write + fmt::Debug + 'static,
-{
     /// TODO
-    pub fn with_writer<W2: io::Write>(self, writer: W2) -> ExporterBuilder<W2> {
-        ExporterBuilder {
+    pub fn with_writer<W2: io::Write>(self, writer: W2) -> StdoutExporterBuilder<W2, S, I> {
+        StdoutExporterBuilder {
+            spawn: self.spawn,
+            interval: self.interval,
             writer,
             pretty_print: self.pretty_print,
             do_not_print_time: self.do_not_print_time,
@@ -75,7 +85,7 @@ where
 
     /// TODO
     pub fn with_pretty_print(self, pretty_print: bool) -> Self {
-        ExporterBuilder {
+        StdoutExporterBuilder {
             pretty_print,
             ..self
         }
@@ -83,7 +93,7 @@ where
 
     /// TODO
     pub fn with_do_not_print_time(self, do_not_print_time: bool) -> Self {
-        ExporterBuilder {
+        StdoutExporterBuilder {
             do_not_print_time,
             ..self
         }
@@ -91,7 +101,7 @@ where
 
     /// TODO
     pub fn with_quantiles(self, quantiles: Vec<f64>) -> Self {
-        ExporterBuilder {
+        StdoutExporterBuilder {
             quantiles: Some(quantiles),
             ..self
         }
@@ -100,9 +110,9 @@ where
     /// TODO
     pub fn with_label_encoder<E>(self, label_encoder: E) -> Self
     where
-        E: labels::Encoder + 'static,
+        E: labels::Encoder + Send + Sync + 'static,
     {
-        ExporterBuilder {
+        StdoutExporterBuilder {
             label_encoder: Some(Box::new(label_encoder)),
             ..self
         }
@@ -110,8 +120,8 @@ where
 
     /// TODO
     pub fn try_init(self) -> metrics::Result<PushController> {
-        let exporter = self.try_build()?;
-        let controller = controllers::push(simple::Selector::Exact, exporter)
+        let (spawn, interval, exporter) = self.try_build()?;
+        let controller = controllers::push(simple::Selector::Exact, exporter, spawn, interval)
             .with_stateful(true)
             .build();
         global::set_meter_provider(controller.provider());
@@ -119,7 +129,7 @@ where
     }
 
     /// TODO
-    fn try_build(self) -> metrics::Result<Exporter<W>> {
+    fn try_build(self) -> metrics::Result<(S, I, StdoutExporter<W>)> {
         if let Some(quantiles) = self.quantiles.as_ref() {
             for q in quantiles {
                 if *q < 0.0 || *q > 1.0 {
@@ -128,12 +138,16 @@ where
             }
         }
 
-        Ok(Exporter {
-            writer: self.writer,
-            pretty_print: self.pretty_print,
-            do_not_print_time: self.do_not_print_time,
-            quantiles: self.quantiles.unwrap_or(vec![0.5, 0.9, 0.99]),
-            label_encoder: self.label_encoder.unwrap_or_else(labels::default_encoder),
-        })
+        Ok((
+            self.spawn,
+            self.interval,
+            StdoutExporter {
+                writer: self.writer,
+                pretty_print: self.pretty_print,
+                do_not_print_time: self.do_not_print_time,
+                quantiles: self.quantiles.unwrap_or(vec![0.5, 0.9, 0.99]),
+                label_encoder: self.label_encoder.unwrap_or_else(labels::default_encoder),
+            },
+        ))
     }
 }

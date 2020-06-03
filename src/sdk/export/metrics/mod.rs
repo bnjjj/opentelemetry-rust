@@ -1,6 +1,11 @@
 //! Metrics Export
 use crate::api::{metrics, metrics::MetricsError};
 use std::fmt;
+use std::sync::Arc;
+
+pub mod aggregator;
+
+pub use aggregator::Aggregator;
 
 /// Integrator is responsible for deciding which kind of aggregation to
 /// use (via AggregationSelector), gathering exported results from the
@@ -20,24 +25,24 @@ use std::fmt;
 /// checkpointed, allowing the integrator to build the set of metrics
 /// currently being exported.
 pub trait Integrator: fmt::Debug {
-    // AggregationSelector is responsible for selecting the
-    // concrete type of Aggregator used for a metric in the SDK.
-    //
-    // This may be a static decision based on fields of the
-    // Descriptor, or it could use an external configuration
-    // source to customize the treatment of each metric
-    // instrument.
-    //
-    // The result from AggregatorSelector.AggregatorFor should be
-    // the same type for a given Descriptor or else nil.  The same
-    // type should be returned for a given descriptor, because
-    // Aggregators only know how to Merge with their own type.  If
-    // the result is nil, the metric instrument will be disabled.
-    //
-    // Note that the SDK only calls AggregatorFor when new records
-    // require an Aggregator. This does not provide a way to
-    // disable metrics with active records.
-    // AggregationSelector
+    /// AggregationSelector is responsible for selecting the
+    /// concrete type of Aggregator used for a metric in the SDK.
+    ///
+    /// This may be a static decision based on fields of the
+    /// Descriptor, or it could use an external configuration
+    /// source to customize the treatment of each metric
+    /// instrument.
+    ///
+    /// The result from AggregatorSelector.AggregatorFor should be
+    /// the same type for a given Descriptor or else nil.  The same
+    /// type should be returned for a given descriptor, because
+    /// Aggregators only know how to Merge with their own type.  If
+    /// the result is nil, the metric instrument will be disabled.
+    ///
+    /// Note that the SDK only calls AggregatorFor when new records
+    /// require an Aggregator. This does not provide a way to
+    /// disable metrics with active records.
+    fn aggregation_selector(&self) -> &dyn AggregationSelector;
 
     /// Process is called by the SDK once per internal record,
     /// passing the export Record (a Descriptor, the corresponding
@@ -51,50 +56,8 @@ pub trait Integrator: fmt::Debug {
 /// TODO
 pub trait AggregationSelector: fmt::Debug {
     /// TODO
-    fn aggregator_for(&self, descriptor: &metrics::Descriptor) -> &dyn Aggregator;
-}
-
-/// TODO
-pub trait Aggregator: fmt::Debug {
-    /// Update receives a new measured value and incorporates it
-    /// into the aggregation.  Update() calls may arrive
-    /// concurrently as the SDK does not provide synchronization.
-    ///
-    /// Descriptor.NumberKind() should be consulted to determine
-    /// whether the provided number is an int64 or float64.
-    ///
-    /// The Context argument comes from user-level code and could be
-    /// inspected for distributed or span context.
-    fn update(
-        &self,
-        number: metrics::Number,
-        descriptor: &metrics::Descriptor,
-    ) -> Result<(), MetricsError>;
-
-    /// Checkpoint is called during collection to finish one period
-    /// of aggregation by atomically saving the current value.
-    /// Checkpoint() is called concurrently with Update().
-    /// Checkpoint should reset the current state to the empty
-    /// state, in order to begin computing a new delta for the next
-    /// collection period.
-    ///
-    /// After the checkpoint is taken, the current value may be
-    /// accessed using by converting to one a suitable interface
-    /// types in the `aggregator` sub-package.
-    ///
-    /// The Context argument originates from the controller that
-    /// orchestrates collection.
-    fn checkpoint(&self, descriptor: &metrics::Descriptor);
-
-    /// Merge combines the checkpointed state from the argument
-    /// aggregator into this aggregator's checkpointed state.
-    /// Merge() is called in a single-threaded context, no locking
-    /// is required.
-    fn merge(
-        self,
-        other: Box<dyn Aggregator>,
-        descriptor: metrics::Descriptor,
-    ) -> Result<(), MetricsError>;
+    fn aggregator_for(&self, descriptor: &metrics::Descriptor)
+        -> Arc<dyn Aggregator + Send + Sync>;
 }
 
 /// TODO

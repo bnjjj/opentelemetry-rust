@@ -4,8 +4,9 @@ use crate::sdk::{
     metrics::{self, integrators, Accumulator, ErrorHandler, Integrator},
     Resource,
 };
-use std::fmt;
-use std::sync::Arc;
+use futures::{channel::mpsc, task, Future, Stream, StreamExt};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time;
 
 lazy_static::lazy_static! {
@@ -14,40 +15,81 @@ lazy_static::lazy_static! {
 }
 
 /// TODO
-pub fn push<S, E>(selector: S, exporter: E) -> PushControllerBuilder
+pub fn push<S, E, SP, SO, I, IO>(
+    selector: S,
+    exporter: E,
+    spawn: SP,
+    interval: I,
+) -> PushControllerBuilder<SP, I>
 where
-    S: AggregationSelector + 'static,
-    E: Exporter + 'static,
+    S: AggregationSelector + Send + Sync + 'static,
+    E: Exporter + Send + Sync + 'static,
+    SP: Fn(PushControllerWorker) -> SO,
+    I: Fn(time::Duration) -> IO,
 {
-    PushControllerBuilder::new(Box::new(selector), Box::new(exporter))
+    PushControllerBuilder {
+        selector: Box::new(selector),
+        exporter: Box::new(exporter),
+        spawn,
+        interval,
+        error_handler: None,
+        resource: None,
+        stateful: None,
+        period: None,
+        timeout: None,
+    }
+}
+
+/// TODO
+#[derive(Debug)]
+pub struct PushController {
+    message_sender: Mutex<mpsc::Sender<PushMessage>>,
+}
+
+#[derive(Debug)]
+enum PushMessage {
+    Tick,
 }
 
 ///TODO
-#[derive(Debug)]
-pub struct PushController {
+#[allow(missing_debug_implementations)]
+pub struct PushControllerWorker {
+    messages: Pin<Box<dyn Stream<Item = PushMessage> + Send>>,
     provider: registry::RegistryMeterProvider,
-    accumulator: Arc<Accumulator>,
-    integrator: Arc<dyn Integrator>,
-    exporter: Box<dyn Exporter>,
+    accumulator: Accumulator,
+    integrator: Arc<dyn Integrator + Send + Sync>,
+    exporter: Box<dyn Exporter + Send + Sync>,
     error_handler: Option<ErrorHandler>,
-    period: time::Duration,
     timeout: time::Duration,
     // clock:        controllerTime.RealClock{},
+}
+
+impl Future for PushControllerWorker {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        todo!()
+    }
 }
 
 impl PushController {
     /// TODO
     pub fn provider(&self) -> registry::RegistryMeterProvider {
-        self.provider.clone()
+        todo!()
+        // self.provider.clone()
     }
     /// TODO
-    pub fn start(&self) {}
+    pub fn start(&self) {
+        todo!()
+    }
 }
 
 /// TODO
-pub struct PushControllerBuilder {
-    selector: Box<dyn AggregationSelector>,
-    exporter: Box<dyn Exporter>,
+#[derive(Debug)]
+pub struct PushControllerBuilder<S, I> {
+    selector: Box<dyn AggregationSelector + Send + Sync>,
+    exporter: Box<dyn Exporter + Send + Sync>,
+    spawn: S,
+    interval: I,
     error_handler: Option<ErrorHandler>,
     resource: Option<Arc<Resource>>,
     stateful: Option<bool>,
@@ -55,32 +97,12 @@ pub struct PushControllerBuilder {
     timeout: Option<time::Duration>,
 }
 
-impl fmt::Debug for PushControllerBuilder {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PushControllerBuilder")
-            .field("selector", &self.selector)
-            .field("exporter", &self.exporter)
-            .field("error_handler", &"Fn(MetricsError)")
-            .field("resource", &self.resource)
-            .field("period", &self.period)
-            .field("timeout", &self.timeout)
-            .finish()
-    }
-}
-
-impl PushControllerBuilder {
-    pub fn new(selector: Box<dyn AggregationSelector>, exporter: Box<dyn Exporter>) -> Self {
-        PushControllerBuilder {
-            selector,
-            exporter,
-            error_handler: None,
-            resource: None,
-            stateful: None,
-            period: None,
-            timeout: None,
-        }
-    }
-
+impl<S, SO, I, IS, ISI> PushControllerBuilder<S, I>
+where
+    S: Fn(PushControllerWorker) -> SO,
+    I: Fn(time::Duration) -> IS,
+    IS: Stream<Item = ISI> + Send + 'static,
+{
     /// TODO
     pub fn with_stateful(self, stateful: bool) -> Self {
         PushControllerBuilder {
@@ -91,7 +113,7 @@ impl PushControllerBuilder {
 
     pub fn with_error_handler<T>(self, error_handler: T) -> Self
     where
-        T: Fn(MetricsError) + 'static,
+        T: Fn(MetricsError) + Send + Sync + 'static,
     {
         PushControllerBuilder {
             error_handler: Some(ErrorHandler::new(error_handler)),
@@ -112,18 +134,26 @@ impl PushControllerBuilder {
         if let Some(resource) = self.resource {
             accumulator = accumulator.with_resource(resource);
         }
-        let accumulator = Arc::new(accumulator.build());
+        let accumulator = accumulator.build();
 
-        PushController {
-            provider: registry::meter_provider(accumulator.clone()),
+        let (message_sender, message_receiver) = mpsc::channel(256);
+        let ticker = (self.interval)(self.period.unwrap_or(DEFAULT_PUSH_PERIOD.clone()))
+            .map(|_| PushMessage::Tick);
+
+        (self.spawn)(PushControllerWorker {
+            messages: Box::pin(futures::stream::select(message_receiver, ticker)),
+            provider: registry::meter_provider(Arc::new(accumulator.clone())),
             accumulator,
             integrator,
             exporter: self.exporter,
             error_handler: self.error_handler,
             // ch:           make(chan struct{}),
-            period: self.period.unwrap_or(DEFAULT_PUSH_PERIOD.clone()),
             timeout: self.timeout.unwrap_or(DEFAULT_PUSH_PERIOD.clone()),
             // clock:        controllerTime.RealClock{},
+        });
+
+        PushController {
+            message_sender: Mutex::new(message_sender),
         }
     }
 }

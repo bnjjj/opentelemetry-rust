@@ -41,7 +41,7 @@ impl Encoder for DefaultLabelEncoder {
 }
 
 /// TODO
-pub fn default_encoder() -> Box<dyn Encoder> {
+pub fn default_encoder() -> Box<dyn Encoder + Send + Sync> {
     Box::new(DefaultLabelEncoder)
 }
 

@@ -18,6 +18,7 @@ edition = "2018"
 [dependencies]
 base64 = { version = "0.12", optional = true }
 bincode = { version = "1.2", optional = true }
+dashmap = { version = "3.11", optional = true }
 futures = { version = "0.3", optional = true }
 lazy_static = "1.4"
 percent-encoding = "2.0"
@@ -37,7 +38,7 @@ tokio = { version = "0.2", features = ["full"] }
 default = ["metrics", "trace"]
 base64_format = ["base64"]
 trace = ["futures", "rand", "pin-project"]
-metrics = ["prometheus", "thiserror"]
+metrics = ["prometheus", "thiserror", "dashmap"]
 serialize = ["serde", "bincode"]
 
 [workspace]

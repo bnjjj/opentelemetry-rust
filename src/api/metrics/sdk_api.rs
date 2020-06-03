@@ -40,7 +40,7 @@ pub trait Instrument: fmt::Debug {
 /// TODO
 pub trait SyncInstrument: fmt::Debug {
     /// TODO
-    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Box<dyn BoundSyncInstrument>;
+    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Arc<dyn BoundSyncInstrument>;
 
     /// TODO
     fn record_one<'a>(&self, number: Number, labels: &'a [KeyValue]) {

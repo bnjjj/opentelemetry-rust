@@ -1,15 +1,17 @@
 //! # OpenTelemetry Metrics SDK
 use crate::api::metrics::{
-    sdk_api::{self, SyncInstrument as _},
-    Descriptor, Measurement, MetricsError, Number, Result,
+    sdk_api::{self, BoundSyncInstrument as _},
+    Descriptor, Measurement, MetricsError, Number, NumberKind, Result,
 };
 use crate::api::{labels, Context, KeyValue};
 use crate::sdk::{
-    export::metrics::{Aggregator, Integrator},
+    export::metrics::{aggregator, Aggregator, Integrator},
     resource::Resource,
 };
 use std::any::Any;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub mod aggregators;
@@ -17,11 +19,18 @@ pub mod controllers;
 pub mod integrators;
 pub mod selectors;
 
-pub use controllers::PushController;
+pub use controllers::{PushController, PushControllerWorker};
 
 ///TODO
 #[derive(Clone)]
-pub struct ErrorHandler(Arc<dyn Fn(MetricsError)>);
+pub struct ErrorHandler(Arc<dyn Fn(MetricsError) + Send + Sync>);
+
+impl ErrorHandler {
+    /// TODO
+    pub fn call(&self, err: MetricsError) {
+        self.0(err)
+    }
+}
 
 impl fmt::Debug for ErrorHandler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -35,14 +44,14 @@ impl ErrorHandler {
     /// TODO
     pub fn new<F>(handler: F) -> Self
     where
-        F: Fn(MetricsError) + 'static,
+        F: Fn(MetricsError) + Send + Sync + 'static,
     {
         ErrorHandler(Arc::new(handler))
     }
 }
 
 /// TODO
-pub fn accumulator(integrator: Arc<dyn Integrator>) -> AccumulatorBuilder {
+pub fn accumulator(integrator: Arc<dyn Integrator + Send + Sync>) -> AccumulatorBuilder {
     AccumulatorBuilder {
         integrator,
         error_handler: None,
@@ -54,7 +63,7 @@ pub fn accumulator(integrator: Arc<dyn Integrator>) -> AccumulatorBuilder {
 /// TODO
 #[derive(Debug)]
 pub struct AccumulatorBuilder {
-    integrator: Arc<dyn Integrator>,
+    integrator: Arc<dyn Integrator + Send + Sync>,
     error_handler: Option<ErrorHandler>,
     push: bool,
     resource: Option<Arc<Resource>>,
@@ -84,7 +93,10 @@ impl AccumulatorBuilder {
 
     /// TODO
     pub fn build(self) -> Accumulator {
-        Accumulator(Arc::new(AccumulatorCore {}))
+        Accumulator(Arc::new(AccumulatorCore::new(
+            self.integrator,
+            self.error_handler,
+        )))
     }
 }
 
@@ -92,50 +104,99 @@ impl AccumulatorBuilder {
 #[derive(Debug, Clone)]
 pub struct Accumulator(Arc<AccumulatorCore>);
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MapKey {
+    descriptor_hash: u64,
+    ordered: labels::Distinct,
+}
+
 /// TODO
 #[derive(Debug)]
-pub struct AccumulatorCore {
-    // // current maps `mapkey` to *record.
-// current Mutex<HashMap<>>
-//
-// // asyncInstruments is a set of
-// // `*asyncInstrument` instances
-// asyncLock        sync.Mutex
-// asyncInstruments *internal.AsyncInstrumentState
-// asyncContext     context.Context
-//
-// // currentEpoch is the current epoch number. It is
-// // incremented in `Collect()`.
-// currentEpoch int64
-//
-// // integrator is the configured integrator+configuration.
-// integrator export.Integrator
-//
-// // collectLock prevents simultaneous calls to Collect().
-// collectLock sync.Mutex
-//
-// // errorHandler supports delivering errors to the user.
-// errorHandler ErrorHandler
-//
-// // asyncSortSlice has a single purpose - as a temporary
-// // place for sorting during labels creation to avoid
-// // allocation.  It is cleared after use.
-// asyncSortSlice label.Sortable
-//
-// // resource is applied to all records in this Accumulator.
-// resource *resource.Resource
+struct AccumulatorCore {
+    // current maps `mapkey` to *record.
+    // current: dashmap::DashMap<MapKey, Record>,
+    current: dashmap::DashMap<MapKey, Arc<Record>>,
+    //
+    // // asyncInstruments is a set of
+    // // `*asyncInstrument` instances
+    // asyncLock        sync.Mutex
+    // asyncInstruments *internal.AsyncInstrumentState
+    // asyncContext     context.Context
+    //
+    // // currentEpoch is the current epoch number. It is
+    // // incremented in `Collect()`.
+    // currentEpoch int64
+    //
+    // // integrator is the configured integrator+configuration.
+    integrator: Arc<dyn Integrator + Send + Sync>,
+    //
+    // // collectLock prevents simultaneous calls to Collect().
+    // collectLock sync.Mutex
+    //
+    // // errorHandler supports delivering errors to the user.
+    error_handler: Option<ErrorHandler>,
+    //
+    // // asyncSortSlice has a single purpose - as a temporary
+    // // place for sorting during labels creation to avoid
+    // // allocation.  It is cleared after use.
+    // asyncSortSlice label.Sortable
+    //
+    // // resource is applied to all records in this Accumulator.
+    resource: Arc<Resource>,
+}
+
+impl AccumulatorCore {
+    fn new(
+        integrator: Arc<dyn Integrator + Send + Sync>,
+        error_handler: Option<ErrorHandler>,
+    ) -> Self {
+        AccumulatorCore {
+            current: dashmap::DashMap::default(),
+            integrator,
+            error_handler,
+            resource: Arc::new(Resource::default()),
+        }
+    }
 }
 
 ///TODO
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SyncInstrument {
-    instrument: Instrument,
+    instrument: Arc<Instrument>,
 }
 
 impl SyncInstrument {
     /// TODO
-    fn acquire_handle(&self, labels: &[KeyValue]) -> Record {
-        todo!()
+    fn acquire_handle(&self, labels: &[KeyValue]) -> Arc<Record> {
+        let mut hasher = DefaultHasher::new();
+        self.instrument.descriptor.hash(&mut hasher);
+        let descriptor_hash = hasher.finish();
+
+        let map_key = MapKey {
+            descriptor_hash,
+            ordered: labels::Distinct::from(labels),
+        };
+
+        if let Some(existing_record) = self.instrument.meter.0.current.get(&map_key) {
+            return existing_record.clone();
+        }
+
+        let record = Arc::new(Record {
+            update_count: Number::default(),
+            collected_count: Number::default(),
+            labels: labels::Set::with_equivalent(map_key.ordered),
+            instrument: self.clone(),
+            recorder: Some(
+                self.instrument
+                    .meter
+                    .0
+                    .integrator
+                    .aggregation_selector()
+                    .aggregator_for(&self.instrument.descriptor),
+            ),
+        });
+
+        record
     }
 }
 
@@ -143,14 +204,14 @@ impl sdk_api::SyncInstrument for SyncInstrument {
     fn bind<'a>(
         &self,
         labels: &'a [crate::api::KeyValue],
-    ) -> Box<dyn sdk_api::BoundSyncInstrument> {
-        todo!()
+    ) -> Arc<dyn sdk_api::BoundSyncInstrument> {
+        self.acquire_handle(labels)
     }
     fn record_one_with_context<'a>(
         &self,
-        cx: &crate::api::Context,
-        number: crate::api::metrics::Number,
-        labels: &'a [crate::api::KeyValue],
+        _cx: &crate::api::Context,
+        _number: crate::api::metrics::Number,
+        _labels: &'a [crate::api::KeyValue],
     ) {
         todo!()
     }
@@ -170,16 +231,16 @@ struct Record {
     // refMapped refcountMapped
 
     // updateCount is incremented on every Update.
-    update_count: i64,
+    update_count: Number,
 
     // collectedCount is set to updateCount on collection,
     // supports checking for no updates during a round.
-    collected_count: i64,
+    collected_count: Number,
 
     // storage is the stored label set for this record,
     // except in cases where a label set is shared due to
     // batch recording.
-    storage: labels::Set,
+    // storage: labels::Set,
 
     // labels is the processed label set for this record.
     // this may refer to the `storage` field in another
@@ -193,24 +254,43 @@ struct Record {
     // sortSlice label.Sortable
 
     // inst is a pointer to the corresponding instrument.
-    instrument: Arc<SyncInstrument>,
+    instrument: SyncInstrument,
 
     // recorder implements the actual RecordOne() API,
     // depending on the type of aggregation.  If nil, the
     // metric was disabled by the exporter.
-    recorder: Arc<dyn Aggregator>,
+    recorder: Option<Arc<dyn Aggregator + Send + Sync>>,
 }
 
-impl sdk_api::SyncInstrument for Record {
-    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Box<dyn sdk_api::BoundSyncInstrument> {
-        todo!()
+impl sdk_api::BoundSyncInstrument for Record {
+    fn record_one_with_context<'a>(&self, cx: &Context, number: Number) {
+        // check if the instrument is disabled according to the AggregationSelector.
+        if let Some(recorder) = &self.recorder {
+            if let Err(err) =
+                aggregator::range_test(&number, &self.instrument.instrument.descriptor)
+            {
+                if let Some(error_handler) = &self.instrument.instrument.meter.0.error_handler {
+                    error_handler.call(err);
+                }
+                return;
+            }
+            if let Err(err) =
+                recorder.update_with_context(cx, number, &self.instrument.instrument.descriptor)
+            {
+                if let Some(error_handler) = &self.instrument.instrument.meter.0.error_handler {
+                    error_handler.call(err);
+                }
+                return;
+            }
+            // Record was modified, inform the Collect() that things need
+            // to be collected while the record is still mapped.
+            self.update_count.add(&NumberKind::U64, 1u64.into());
+        }
     }
-    fn record_one_with_context<'a>(&self, cx: &Context, number: Number, labels: &'a [KeyValue]) {
-        todo!()
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
+
+    // fn as_any(&self) -> &dyn Any {
+    //     self
+    // }
 }
 
 ///TODO
@@ -226,10 +306,10 @@ impl sdk_api::MeterCore for Accumulator {
         descriptor: Descriptor,
     ) -> Result<Arc<dyn sdk_api::SyncInstrument>> {
         Ok(Arc::new(SyncInstrument {
-            instrument: Instrument {
+            instrument: Arc::new(Instrument {
                 descriptor,
                 meter: self.clone(),
-            },
+            }),
         }))
     }
 
@@ -249,7 +329,7 @@ impl sdk_api::MeterCore for Accumulator {
                 //     labelsPtr = h.labels
                 // }
 
-                handle.record_one_with_context(cx, measure.number, labels);
+                handle.record_one_with_context(cx, measure.number);
             }
         }
     }

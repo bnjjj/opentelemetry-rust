@@ -5,6 +5,7 @@ edition = "2018"
 
 [dependencies]
 thrift = "0.13"
+tokio = { version = "0.2.21", features = ["full"] }
 lazy_static = "1.4.0"
 opentelemetry = { path = "../../" }
 opentelemetry-jaeger = { path = "../../opentelemetry-jaeger" }

@@ -1,7 +1,7 @@
 use crate::api::metrics::{Config, InstrumentKind, NumberKind};
 
 /// TODO
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 pub struct Descriptor {
     pub(crate) name: String,
     pub(crate) instrument_kind: InstrumentKind,

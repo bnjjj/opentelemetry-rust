@@ -1,7 +1,7 @@
 use crate::api::metrics::{
     sdk_api, Descriptor, InstrumentKind, Measurement, Meter, Number, NumberKind,
 };
-use crate::api::KeyValue;
+use crate::api::{Context, KeyValue};
 use std::marker;
 use std::sync::Arc;
 
@@ -17,8 +17,13 @@ where
     T: Into<Number>,
 {
     /// TODO
-    pub fn bind<'a>(&self, labels: &'a [KeyValue]) -> BoundValueRecorder<'a> {
-        BoundValueRecorder { labels }
+    pub fn bind<'a>(&self, labels: &'a [KeyValue]) -> BoundValueRecorder<'a, T> {
+        let instrument = self.instrument.bind(labels);
+        BoundValueRecorder {
+            labels,
+            instrument,
+            _marker: marker::PhantomData,
+        }
     }
 
     /// TODO
@@ -32,8 +37,25 @@ where
 
 /// TODO
 #[derive(Debug)]
-pub struct BoundValueRecorder<'a> {
+pub struct BoundValueRecorder<'a, T> {
     labels: &'a [KeyValue],
+    instrument: Arc<dyn sdk_api::BoundSyncInstrument>,
+    _marker: marker::PhantomData<T>,
+}
+
+impl<'a, T> BoundValueRecorder<'a, T>
+where
+    T: Into<Number>,
+{
+    /// TODO
+    pub fn record(&self, value: T) {
+        self.record_with_context(&Context::current(), value)
+    }
+
+    /// TODO
+    pub fn record_with_context(&self, cx: &Context, value: T) {
+        self.instrument.record_one_with_context(cx, value.into())
+    }
 }
 
 /// TODO

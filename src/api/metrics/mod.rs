@@ -226,6 +226,12 @@ pub enum MetricsError {
     /// TODO
     #[error("the requested quantile is out of range")]
     InvalidQuantile,
+    /// TODO
+    #[error("NaN value is an invalid input")]
+    NaNInput,
+    /// TODO
+    #[error("negative value is out of range for this instrument")]
+    NegativeInput,
 }
 
 /// TODO
@@ -314,19 +320,25 @@ pub trait MeterProvider: fmt::Debug {
 }
 
 /// TODO
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 pub enum InstrumentKind {
     /// TODO
     ValueObserver,
     /// TODO
     ValueRecorder,
+    /// TODO
+    Counter,
+    /// TODO
+    SumObserver,
 }
 
 /// TODO
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 pub enum NumberKind {
     /// TODO
     F64,
+    /// TODO
+    U64,
 }
 
 /// TODO
