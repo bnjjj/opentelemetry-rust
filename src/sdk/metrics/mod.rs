@@ -1,7 +1,7 @@
 //! # OpenTelemetry Metrics SDK
 use crate::api::metrics::{
-    sdk_api::{self, BoundSyncInstrument as _},
-    Descriptor, Measurement, MetricsError, Number, NumberKind, Result,
+    sdk_api::{self, AsyncInstrument as _, BoundSyncInstrument as _},
+    Descriptor, Measurement, MetricsError, Number, NumberKind, Observation, Result, Runner,
 };
 use crate::api::{labels, Context, KeyValue};
 use crate::sdk::{
@@ -12,7 +12,7 @@ use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub mod aggregators;
 pub mod controllers;
@@ -110,6 +110,57 @@ struct MapKey {
     ordered: labels::Distinct,
 }
 
+#[derive(Debug)]
+struct AsyncInstrumentState {
+    // /// runnerMap keeps the set of runners that will run each
+    // /// collection interval.  Singletons are entered with a real
+    // /// instrument each, batch observers are entered with a nil
+    // /// instrument, ensuring that when a singleton callback is used
+    // /// repeatedly, it is executed repeatedly in the interval, while
+    // /// when a batch callback is used repeatedly, it only executes
+    // /// once per interval.
+    // runner_map: HashMap<Runner, Any>,
+    /// runners maintains the set of runners in the order they were
+    /// registered.
+    runners: Vec<Runner>,
+
+    /// instruments maintains the set of instruments in the order
+    /// they were registered.
+    instruments: Vec<Arc<dyn sdk_api::AsyncInstrument + Send + Sync>>,
+}
+
+trait AsyncCollector {
+    fn collect_async(&self, _labels: &[KeyValue], _observations: Vec<Observation>) {
+        todo!()
+    }
+}
+
+impl AsyncInstrumentState {
+    fn run(&self, collector: &dyn AsyncCollector) {
+        for rp in self.runners.iter() {
+            // // The runner must be a single or batch runner, no
+            // // other implementations are possible because the
+            // // interface has un-exported methods.
+            // if let Some(single_runner) = rp.as_any().downcast_ref::<AsyncSingleRunner>() {
+            //     single_runner.run(rp.instrument, &collector.collect_async);
+            //     continue;
+            // }
+            // if let Some(multi_runner) = rp.as_any().downcast_ref::<AsyncBatchRunner>() {
+            //     multi_runner.run(rp.instrument, &collector.collect_async);
+            //     continue;
+            // }
+            //
+            // if let Some(error_handler) = collector.error_handler() {
+            //     error_handler.call(MetricsError::InvalidAsyncRunner(format!("{:?}", rp)))
+            // }
+            todo!()
+            // rp.run(rp.instrument, self.collect_async)
+        }
+    }
+}
+
+impl AsyncCollector for AsyncInstrumentState {}
+
 /// TODO
 #[derive(Debug)]
 struct AccumulatorCore {
@@ -118,14 +169,12 @@ struct AccumulatorCore {
     current: dashmap::DashMap<MapKey, Arc<Record>>,
     //
     // // asyncInstruments is a set of
-    // // `*asyncInstrument` instances
-    // asyncLock        sync.Mutex
-    // asyncInstruments *internal.AsyncInstrumentState
+    async_instruments: Mutex<AsyncInstrumentState>,
     // asyncContext     context.Context
     //
     // // currentEpoch is the current epoch number. It is
     // // incremented in `Collect()`.
-    // currentEpoch int64
+    current_epoch: u64,
     //
     // // integrator is the configured integrator+configuration.
     integrator: Arc<dyn Integrator + Send + Sync>,
@@ -152,10 +201,59 @@ impl AccumulatorCore {
     ) -> Self {
         AccumulatorCore {
             current: dashmap::DashMap::default(),
+            async_instruments: Mutex::new(AsyncInstrumentState {
+                runners: Vec::default(),
+                instruments: Vec::default(),
+            }),
+            current_epoch: 0,
             integrator,
             error_handler,
             resource: Arc::new(Resource::default()),
         }
+    }
+
+    fn register(
+        &self,
+        instrument: Arc<dyn sdk_api::AsyncInstrument + Send + Sync>,
+        runner: Runner,
+    ) -> Result<()> {
+        self.async_instruments
+            .try_lock()
+            .map_err(|lock_err| MetricsError::Other(lock_err.to_string()))
+            .map(|mut async_instruments| {
+                async_instruments.instruments.push(instrument);
+                async_instruments.runners.push(runner);
+            })
+    }
+
+    fn collect(&self) -> usize {
+        let mut checkpointed = self.observe_async_instruments();
+        // checkpointed += self.collect_sync_instruments();
+
+        todo!()
+        // self.current_epoch += 1;
+
+        // checkpointed
+    }
+
+    fn observe_async_instruments(&self) -> usize {
+        self.async_instruments
+            .lock()
+            .map_or(0, |async_instruments| {
+                let mut async_collected = 0;
+                // self.async_context = cx;
+
+                async_instruments.run(&*async_instruments);
+                // m.asyncContext = None;
+
+                for inst in &async_instruments.instruments {
+                    // if let Some(a) = self.from_async(inst) {
+                    //     async_collected += self.checkpoint_async(a);
+                    // }
+                }
+
+                async_collected
+            })
     }
 }
 
@@ -219,6 +317,20 @@ impl sdk_api::SyncInstrument for SyncInstrument {
         self
     }
 }
+
+///TODO
+#[derive(Debug, Clone)]
+pub struct AsyncInstrument {
+    instrument: Arc<Instrument>,
+}
+
+impl sdk_api::Instrument for AsyncInstrument {
+    fn descriptor(&self) -> &str {
+        "AsyncInstrument"
+    }
+}
+
+impl sdk_api::AsyncInstrument for AsyncInstrument {}
 
 /// record maintains the state of one metric instrument.  Due
 /// the use of lock-free algorithms, there may be more than one
@@ -333,20 +445,23 @@ impl sdk_api::MeterCore for Accumulator {
             }
         }
     }
-    // fn new_async<T, F>(
-    //     &self,
-    //     name: T,
-    //     kind: metrics::ObserverKind,
-    //     number: metrics::NumberKind,
-    //     callback: F,
-    // ) -> metrics::AsyncInstrumentBuilder
-    // where
-    //     Self: Sized,
-    //     T: Into<String>,
-    //     F: Fn(metrics::F64ObserverResult),
-    // {
-    //     todo!()
-    // }
+
+    fn new_async_instrument(
+        &self,
+        descriptor: Descriptor,
+        runner: Runner,
+    ) -> Result<Arc<dyn sdk_api::AsyncInstrument>> {
+        let instrument = Arc::new(AsyncInstrument {
+            instrument: Arc::new(Instrument {
+                descriptor,
+                meter: self.clone(),
+            }),
+        });
+
+        self.0.register(instrument.clone(), runner);
+
+        Ok(instrument)
+    }
 }
 
 // //!

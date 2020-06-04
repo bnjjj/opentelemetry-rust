@@ -1,5 +1,5 @@
 //! Metrics SDK API
-use crate::api::metrics::{Descriptor, Measurement, Number, Result};
+use crate::api::metrics::{Descriptor, Measurement, Number, Result, Runner};
 use crate::api::{Context, KeyValue};
 use std::any::Any;
 use std::fmt;
@@ -7,18 +7,6 @@ use std::sync::Arc;
 
 /// TODO
 pub trait MeterCore: fmt::Debug {
-    // TODO
-    // fn new_async<T, F>(
-    //     &self,
-    //     name: String,
-    //     kind: InstrumentKind,
-    //     number: NumberKind,
-    //     callback: Runner,
-    // ) -> AsyncInstrument
-    // where
-    //     Self: Sized,
-    //     T: Into<String>;
-
     /// TODO
     fn record_batch_with_context(
         &self,
@@ -29,6 +17,13 @@ pub trait MeterCore: fmt::Debug {
 
     /// TODO
     fn new_sync_instrument(&self, descriptor: Descriptor) -> Result<Arc<dyn SyncInstrument>>;
+
+    /// TODO
+    fn new_async_instrument(
+        &self,
+        descriptor: Descriptor,
+        runner: Runner,
+    ) -> Result<Arc<dyn AsyncInstrument>>;
 }
 
 /// TODO

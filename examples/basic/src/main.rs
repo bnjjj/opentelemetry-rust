@@ -53,8 +53,7 @@ lazy_static::lazy_static! {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracer()?;
-    let metrics_controller = init_meter()?;
-    let _start = metrics_controller.start();
+    let _started = init_meter()?;
 
     let meter = global::meter("ex.com/basic");
 

@@ -211,7 +211,8 @@ mod value_recorder;
 pub use config::Config;
 pub use descriptor::Descriptor;
 pub use number::Number;
-pub use sync::{F64ObserverResult, Measurement};
+use std::error::Error;
+pub use sync::{F64ObserverResult, Measurement, Observation};
 pub use value_recorder::{ValueRecorder, ValueRecorderBuilder};
 
 /// TODO
@@ -221,8 +222,11 @@ pub type Result<T> = result::Result<T, MetricsError>;
 #[derive(Error, Debug)]
 pub enum MetricsError {
     /// TODO
-    #[error("unknown metrics error")]
-    Unknown,
+    #[error("metrics error: {0}")]
+    Other(String),
+    /// TODO
+    #[error("metrics error: {0}")]
+    StdError(#[source] Box<dyn Error + Send + 'static>),
     /// TODO
     #[error("the requested quantile is out of range")]
     InvalidQuantile,
@@ -232,6 +236,9 @@ pub enum MetricsError {
     /// TODO
     #[error("negative value is out of range for this instrument")]
     NegativeInput,
+    /// TODO
+    #[error("unknown async runner type: {0} (reported once)")]
+    InvalidAsyncRunner(String),
 }
 
 /// TODO
@@ -255,7 +262,7 @@ impl Meter {
     where
         Self: Sized,
         T: Into<String>,
-        F: Fn(F64ObserverResult) + 'static,
+        F: Fn(F64ObserverResult) + Send + Sync + 'static,
     {
         ValueObserverBuilder {
             meter: self,
@@ -381,8 +388,22 @@ impl<T> ValueObserverBuilder<'_, T> {
 /// TODO
 pub enum Runner {
     /// TODO
-    F64Async(Box<dyn Fn(F64ObserverResult)>),
+    F64Async(Box<dyn Fn(F64ObserverResult) + Send + Sync + 'static>),
 }
+
+impl Runner {
+    /// TODO
+    pub fn run(
+        &self,
+        instrument: Arc<dyn sdk_api::AsyncInstrument>,
+        f: fn(&[KeyValue], &[Observation]),
+    ) {
+        match self {
+            Runner::F64Async(run) => run(F64ObserverResult::new(instrument, f)),
+        }
+    }
+}
+
 impl fmt::Debug for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

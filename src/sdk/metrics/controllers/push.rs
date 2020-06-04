@@ -1,7 +1,11 @@
 use crate::api::metrics::{registry, MetricsError};
 use crate::sdk::{
     export::metrics::{AggregationSelector, Exporter},
-    metrics::{self, integrators, Accumulator, ErrorHandler, Integrator},
+    metrics::{
+        self,
+        integrators::{self, SimpleIntegrator},
+        Accumulator, ErrorHandler,
+    },
     Resource,
 };
 use futures::{channel::mpsc, task, Future, Stream, StreamExt};
@@ -44,11 +48,13 @@ where
 #[derive(Debug)]
 pub struct PushController {
     message_sender: Mutex<mpsc::Sender<PushMessage>>,
+    provider: registry::RegistryMeterProvider,
 }
 
 #[derive(Debug)]
 enum PushMessage {
     Tick,
+    Shutdown,
 }
 
 ///TODO
@@ -57,29 +63,58 @@ pub struct PushControllerWorker {
     messages: Pin<Box<dyn Stream<Item = PushMessage> + Send>>,
     provider: registry::RegistryMeterProvider,
     accumulator: Accumulator,
-    integrator: Arc<dyn Integrator + Send + Sync>,
+    integrator: Arc<SimpleIntegrator>,
     exporter: Box<dyn Exporter + Send + Sync>,
     error_handler: Option<ErrorHandler>,
     timeout: time::Duration,
-    // clock:        controllerTime.RealClock{},
 }
 
 impl Future for PushControllerWorker {
     type Output = ();
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-        todo!()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        loop {
+            match futures::ready!(self.messages.poll_next_unpin(cx)) {
+                // Span batch interval time reached, export current spans.
+                Some(PushMessage::Tick) => {
+                    // ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+                    // defer cancel()
+
+                    self.integrator
+                        .try_lock_inner(|_integrator| {
+                            self.accumulator.0.collect();
+                            //
+                            // self.exporter.export(integrator.checkpoint_set())?;
+                            // integrator.finished_collection();
+                            //
+                            // Ok(())
+                        })
+                        .map_err(|err| {
+                            if let Some(error_handler) = &self.error_handler {
+                                error_handler.call(err);
+                            }
+                        });
+                }
+                // Stream has terminated or processor is shutdown, return to finish execution.
+                None | Some(PushMessage::Shutdown) => {
+                    return task::Poll::Ready(());
+                }
+            }
+        }
     }
 }
 
 impl PushController {
     /// TODO
     pub fn provider(&self) -> registry::RegistryMeterProvider {
-        todo!()
-        // self.provider.clone()
+        self.provider.clone()
     }
-    /// TODO
-    pub fn start(&self) {
-        todo!()
+}
+
+impl Drop for PushController {
+    fn drop(&mut self) {
+        if let Ok(mut sender) = self.message_sender.try_lock() {
+            let _ = sender.try_send(PushMessage::Shutdown);
+        }
     }
 }
 
@@ -135,6 +170,7 @@ where
             accumulator = accumulator.with_resource(resource);
         }
         let accumulator = accumulator.build();
+        let provider = registry::meter_provider(Arc::new(accumulator.clone()));
 
         let (message_sender, message_receiver) = mpsc::channel(256);
         let ticker = (self.interval)(self.period.unwrap_or(DEFAULT_PUSH_PERIOD.clone()))
@@ -142,7 +178,7 @@ where
 
         (self.spawn)(PushControllerWorker {
             messages: Box::pin(futures::stream::select(message_receiver, ticker)),
-            provider: registry::meter_provider(Arc::new(accumulator.clone())),
+            provider: provider.clone(),
             accumulator,
             integrator,
             exporter: self.exporter,
@@ -154,6 +190,7 @@ where
 
         PushController {
             message_sender: Mutex::new(message_sender),
+            provider,
         }
     }
 }

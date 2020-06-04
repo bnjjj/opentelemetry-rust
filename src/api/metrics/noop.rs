@@ -5,8 +5,8 @@
 //! to have minimal resource utilization and runtime impact.
 use crate::api::{
     metrics::{
-        sdk_api::{BoundSyncInstrument, MeterCore, SyncInstrument},
-        Descriptor, Measurement, Meter, MeterProvider, Number, Result,
+        sdk_api::{AsyncInstrument, BoundSyncInstrument, Instrument, MeterCore, SyncInstrument},
+        Descriptor, Measurement, Meter, MeterProvider, Number, Result, Runner,
     },
     Context, KeyValue,
 };
@@ -30,6 +30,15 @@ impl MeterCore for NoopMeterCore {
     fn new_sync_instrument(&self, _descriptor: Descriptor) -> Result<Arc<dyn SyncInstrument>> {
         Ok(Arc::new(NoopSyncInstrument))
     }
+
+    fn new_async_instrument(
+        &self,
+        _descriptor: Descriptor,
+        runner: Runner,
+    ) -> Result<Arc<dyn AsyncInstrument>> {
+        Ok(Arc::new(NoopAsyncInstrument))
+    }
+
     fn record_batch_with_context(
         &self,
         cx: &Context,
@@ -70,6 +79,18 @@ impl BoundSyncInstrument for NoopBoundSyncInstrument {
         todo!()
     }
 }
+
+/// TODO
+#[derive(Debug)]
+pub struct NoopAsyncInstrument;
+
+impl Instrument for NoopAsyncInstrument {
+    fn descriptor(&self) -> &str {
+        "NoopAsyncInstrument"
+    }
+}
+
+impl AsyncInstrument for NoopAsyncInstrument {}
 
 // /// A no-op instance of a `Meter`.
 // #[derive(Clone, Debug)]
