@@ -7,7 +7,7 @@ use crate::api::{labels, Context, KeyValue};
 use crate::sdk::{
     export::{
         self,
-        metrics::{aggregator, Aggregator, Integrator},
+        metrics::{aggregator, Aggregator, Integrator, LockedIntegrator},
     },
     resource::Resource,
 };
@@ -232,15 +232,15 @@ impl AccumulatorCore {
             })
     }
 
-    fn collect(&self) -> usize {
-        let mut checkpointed = self.observe_async_instruments();
-        checkpointed += self.collect_sync_instruments();
+    fn collect(&self, locked_integrator: &mut dyn LockedIntegrator) -> usize {
+        let mut checkpointed = self.observe_async_instruments(locked_integrator);
+        checkpointed += self.collect_sync_instruments(locked_integrator);
         self.current_epoch.add(&NumberKind::U64, &1u64.into());
 
         checkpointed
     }
 
-    fn observe_async_instruments(&self) -> usize {
+    fn observe_async_instruments(&self, locked_integrator: &mut dyn LockedIntegrator) -> usize {
         self.async_instruments
             .lock()
             .map_or(0, |async_instruments| {
@@ -252,7 +252,7 @@ impl AccumulatorCore {
 
                 for (_runner, instrument) in &async_instruments.runners {
                     if let Some(a) = instrument.as_any().downcast_ref::<AsyncInstrument>() {
-                        async_collected += self.checkpoint_async(a);
+                        async_collected += self.checkpoint_async(a, locked_integrator);
                     }
                 }
 
@@ -260,7 +260,7 @@ impl AccumulatorCore {
             })
     }
 
-    fn collect_sync_instruments(&self) -> usize {
+    fn collect_sync_instruments(&self, locked_integrator: &mut dyn LockedIntegrator) -> usize {
         let mut checkpointed = 0;
 
         self.current.retain(|_key, value| {
@@ -271,7 +271,7 @@ impl AccumulatorCore {
             if dbg!(mods.partial_cmp(&NumberKind::U64, coll) != Some(Ordering::Equal)) {
                 // Updates happened in this interval,
                 // checkpoint and continue.
-                checkpointed += self.checkpoint_record(value);
+                checkpointed += self.checkpoint_record(value, locked_integrator);
                 println!(
                     "--- assigning collected count to {:?}",
                     mods.to_debug(&NumberKind::U64)
@@ -292,6 +292,7 @@ impl AccumulatorCore {
         descriptor: &Descriptor,
         recorder: Option<&Arc<dyn Aggregator + Send + Sync>>,
         labels: &labels::Set,
+        locked_integrator: &mut dyn LockedIntegrator,
     ) -> usize {
         match recorder {
             None => 0,
@@ -300,7 +301,7 @@ impl AccumulatorCore {
 
                 let export_record =
                     export::metrics::record(descriptor, labels, &self.resource, recorder);
-                if let Err(_err) = self.integrator.process(export_record) {
+                if let Err(_err) = locked_integrator.process(export_record) {
                     todo!()
                     // global::handle(err)
                 }
@@ -310,15 +311,24 @@ impl AccumulatorCore {
         }
     }
 
-    fn checkpoint_record(&self, record: &Record) -> usize {
+    fn checkpoint_record(
+        &self,
+        record: &Record,
+        locked_integrator: &mut dyn LockedIntegrator,
+    ) -> usize {
         self.checkpoint(
             &record.instrument.instrument.descriptor,
             record.recorder.as_ref(),
             &record.labels,
+            locked_integrator,
         )
     }
 
-    fn checkpoint_async(&self, instrument: &AsyncInstrument) -> usize {
+    fn checkpoint_async(
+        &self,
+        instrument: &AsyncInstrument,
+        locked_integrator: &mut dyn LockedIntegrator,
+    ) -> usize {
         instrument.recorders.try_lock().map_or(0, |mut recorders| {
             let mut checkpointed = 0;
             match recorders.as_mut() {
@@ -334,6 +344,7 @@ impl AccumulatorCore {
                                 &instrument.instrument.descriptor,
                                 label_recorder.recorder.as_ref(),
                                 &label_recorder.labels,
+                                locked_integrator,
                             )
                         }
 

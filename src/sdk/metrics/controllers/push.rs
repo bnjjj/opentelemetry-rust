@@ -1,6 +1,6 @@
 use crate::api::metrics::{registry, MetricsError};
 use crate::sdk::{
-    export::metrics::{AggregationSelector, Exporter},
+    export::metrics::{AggregationSelector, Exporter, Integrator, LockedIntegrator},
     metrics::{
         self,
         integrators::{self, SimpleIntegrator},
@@ -65,7 +65,7 @@ pub struct PushControllerWorker {
     integrator: Arc<SimpleIntegrator>,
     exporter: Box<dyn Exporter + Send + Sync>,
     error_handler: Option<ErrorHandler>,
-    timeout: time::Duration,
+    _timeout: time::Duration,
 }
 
 impl Future for PushControllerWorker {
@@ -77,18 +77,17 @@ impl Future for PushControllerWorker {
                 Some(PushMessage::Tick) => {
                     // ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
                     // defer cancel()
+                    let me = &self;
 
                     // TODO see if single lock here can prevent each lock to process
-                    // self.integrator.try_lock()
-                    self.accumulator.0.collect();
-
-                    let mut checkpoint_set = self.integrator.checkpoint_set();
-                    if let Err(err) = self.exporter.export(&mut checkpoint_set) {
-                        if let Some(error_handler) = &self.error_handler {
-                            error_handler.call(err);
-                        }
+                    let mut locked_integrator = me.integrator.lock().unwrap();
+                    me.accumulator.0.collect(&mut locked_integrator);
+                    if let Err(err) = me.exporter.export(locked_integrator.checkpoint_set()) {
+                        // if let Some(error_handler) = &self.error_handler {
+                        //     error_handler.call(err);
+                        // }
                     }
-                    self.integrator.finished_collection();
+                    locked_integrator.finished_collection();
                 }
                 // Stream has terminated or processor is shutdown, return to finish execution.
                 None | Some(PushMessage::Shutdown) => {
@@ -190,7 +189,7 @@ where
             exporter: self.exporter,
             error_handler: self.error_handler,
             // ch:           make(chan struct{}),
-            timeout: self.timeout.unwrap_or(DEFAULT_PUSH_PERIOD.clone()),
+            _timeout: self.timeout.unwrap_or(DEFAULT_PUSH_PERIOD.clone()),
             // clock:        controllerTime.RealClock{},
         });
 

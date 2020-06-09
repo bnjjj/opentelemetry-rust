@@ -47,14 +47,23 @@ pub trait Integrator: fmt::Debug {
     /// require an Aggregator. This does not provide a way to
     /// disable metrics with active records.
     fn aggregation_selector(&self) -> &dyn AggregationSelector;
+}
 
+///TODO
+pub trait LockedIntegrator {
     /// Process is called by the SDK once per internal record,
     /// passing the export Record (a Descriptor, the corresponding
     /// Labels, and the checkpointed Aggregator).
     ///
     /// The Context argument originates from the controller that
     /// orchestrates collection.
-    fn process(&self, record: Record) -> Result<()>;
+    fn process(&mut self, record: Record) -> Result<()>;
+
+    /// TODO
+    fn checkpoint_set(&mut self) -> &mut dyn CheckpointSet;
+
+    /// TODO
+    fn finished_collection(&mut self);
 }
 
 /// TODO
@@ -73,7 +82,7 @@ pub trait Exporter: fmt::Debug {
     ///
     /// The CheckpointSet interface refers to the Integrator that just
     /// completed collection.
-    fn export(&mut self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()>;
+    fn export(&self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()>;
 }
 
 /// TODO

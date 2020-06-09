@@ -16,6 +16,7 @@ use crate::sdk::{
 use futures::Stream;
 use std::fmt;
 use std::io;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 /// TODO
@@ -31,7 +32,7 @@ where
 /// TODO
 #[derive(Debug)]
 pub struct StdoutExporter<W> {
-    writer: W,
+    writer: Mutex<W>,
     pretty_print: bool,
     do_not_print_time: bool,
     quantiles: Vec<f64>,
@@ -68,7 +69,7 @@ impl<W> Exporter for StdoutExporter<W>
 where
     W: fmt::Debug + io::Write,
 {
-    fn export(&mut self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()> {
+    fn export(&self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()> {
         let mut batch = ExpoBatch::default();
         if !self.do_not_print_time {
             batch.timestamp = Some(SystemTime::now());
@@ -152,9 +153,10 @@ where
             Ok(())
         })?;
 
-        self.writer
-            .write_all(format!("{:?}\n", batch).as_bytes())
-            .map_err(From::from)
+        self.writer.lock().map_err(From::from).and_then(|mut w| {
+            w.write_all(format!("{:?}\n", batch).as_bytes())
+                .map_err(From::from)
+        })
         // let data = serde_json::to_value(batch)?;
         // if self.pretty_print {
         //     self.writer
@@ -173,7 +175,7 @@ where
 pub struct StdoutExporterBuilder<W, S, I> {
     spawn: S,
     interval: I,
-    writer: W,
+    writer: Mutex<W>,
     pretty_print: bool,
     do_not_print_time: bool,
     quantiles: Option<Vec<f64>>,
@@ -192,7 +194,7 @@ where
         StdoutExporterBuilder {
             spawn,
             interval,
-            writer: io::stdout(),
+            writer: Mutex::new(io::stdout()),
             pretty_print: false,
             do_not_print_time: false,
             quantiles: None,
@@ -205,7 +207,7 @@ where
         StdoutExporterBuilder {
             spawn: self.spawn,
             interval: self.interval,
-            writer,
+            writer: Mutex::new(writer),
             pretty_print: self.pretty_print,
             do_not_print_time: self.do_not_print_time,
             quantiles: self.quantiles,
