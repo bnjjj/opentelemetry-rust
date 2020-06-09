@@ -36,7 +36,7 @@ pub struct MinMaxSumCountAggregator {
 impl MinMaxSumCountAggregator {
     /// TODO
     pub fn count(&self) -> Result<u64> {
-        self.inner.try_lock().map_err(From::from).map(|inner| {
+        self.inner.lock().map_err(From::from).map(|inner| {
             inner
                 .checkpoint
                 .as_ref()
@@ -46,7 +46,7 @@ impl MinMaxSumCountAggregator {
 
     /// TODO
     pub fn max(&self) -> Result<Number> {
-        self.inner.try_lock().map_err(From::from).map(|inner| {
+        self.inner.lock().map_err(From::from).map(|inner| {
             inner
                 .checkpoint
                 .as_ref()
@@ -56,7 +56,7 @@ impl MinMaxSumCountAggregator {
 
     /// TODO
     pub fn min(&self) -> Result<Number> {
-        self.inner.try_lock().map_err(From::from).map(|inner| {
+        self.inner.lock().map_err(From::from).map(|inner| {
             inner
                 .checkpoint
                 .as_ref()
@@ -73,28 +73,17 @@ impl Aggregator for MinMaxSumCountAggregator {
         descriptor: &Descriptor,
     ) -> Result<()> {
         self.inner
-            .try_lock()
+            .lock()
             .map(|mut inner| {
                 let current = &mut inner.current;
                 let kind = descriptor.number_kind();
-                // println!("UPDATING IN AGGREGATOR: {:?}", descriptor);
 
                 current.count.add(&NumberKind::U64, &1u64.into());
                 current.sum.add(kind, number);
                 if number.partial_cmp(kind, &current.min) == Some(Ordering::Less) {
-                    // println!(
-                    //     "NEW MIN: {:?}, {:?}",
-                    //     current.min.to_debug(kind),
-                    //     number.to_debug(kind)
-                    // );
                     current.min = number.clone();
                 }
                 if number.partial_cmp(kind, &current.max) == Some(Ordering::Greater) {
-                    // println!(
-                    //     "NEW MAX: {:?}, {:?}",
-                    //     current.max.to_debug(kind),
-                    //     number.to_debug(kind)
-                    // );
                     current.max = number.clone();
                 }
             })
@@ -102,7 +91,7 @@ impl Aggregator for MinMaxSumCountAggregator {
     }
 
     fn checkpoint(&self, _descriptor: &Descriptor) {
-        let _ = self.inner.try_lock().map(|mut inner| {
+        let _ = self.inner.lock().map(|mut inner| {
             inner.checkpoint = Some(mem::replace(&mut inner.current, State::empty(&self.kind)))
         });
     }
@@ -112,47 +101,27 @@ impl Aggregator for MinMaxSumCountAggregator {
         aggregator: &Arc<dyn Aggregator + Send + Sync>,
         descriptor: &Descriptor,
     ) -> Result<()> {
-        // println!("MERGING, see strategy below");
         if let Some(other) = aggregator.as_any().downcast_ref::<Self>() {
             self.inner.lock().map_err(From::from).and_then(|mut inner| {
                 other.inner.lock().map_err(From::from).and_then(|oi| {
                     match (inner.checkpoint.as_ref(), oi.checkpoint.as_ref()) {
                         (None, Some(other_checkpoint)) => {
-                            // println!("Choosing right, no current");
-                            // dbg!(other_checkpoint.min.to_debug(descriptor.number_kind()));
-                            // dbg!(other_checkpoint.max.to_debug(descriptor.number_kind()));
                             inner.checkpoint = Some(other_checkpoint.clone());
                         }
                         (Some(_), None) | (None, None) => (),
                         (Some(cp), Some(ocp)) => {
-                            // println!("MERGING IN AGGREGATOR: {:?}", descriptor);
                             cp.count.add(&NumberKind::U64, &ocp.count);
                             cp.sum.add(descriptor.number_kind(), &ocp.sum);
 
                             if cp.min.partial_cmp(descriptor.number_kind(), &ocp.min)
                                 == Some(Ordering::Greater)
                             {
-                                // dbg!(
-                                //     "NEW MIN",
-                                //     cp.min.to_debug(descriptor.number_kind()),
-                                //     ocp.min.to_debug(descriptor.number_kind())
-                                // );
                                 cp.min.assign(descriptor.number_kind(), &ocp.min);
                             } else {
-                                // dbg!(
-                                //     "KEEPING MIN",
-                                //     cp.min.to_debug(descriptor.number_kind()),
-                                //     ocp.min.to_debug(descriptor.number_kind())
-                                // );
                             }
                             if cp.max.partial_cmp(descriptor.number_kind(), &ocp.max)
                                 == Some(Ordering::Less)
                             {
-                                // dbg!(
-                                //     "NEW MAX",
-                                //     cp.max.to_debug(descriptor.number_kind()),
-                                //     ocp.max.to_debug(descriptor.number_kind())
-                                // );
                                 cp.max.assign(descriptor.number_kind(), &ocp.max);
                             }
                         }
@@ -161,10 +130,10 @@ impl Aggregator for MinMaxSumCountAggregator {
                 })
             })
         } else {
-            dbg!(Err(MetricsError::InconsistentMergeError(format!(
+            Err(MetricsError::InconsistentMergeError(format!(
                 "Expected {:?}, got: {:?}",
                 self, aggregator
-            ))))
+            )))
         }
     }
 

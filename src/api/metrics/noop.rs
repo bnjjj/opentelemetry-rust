@@ -34,16 +34,16 @@ impl MeterCore for NoopMeterCore {
     fn new_async_instrument(
         &self,
         _descriptor: Descriptor,
-        runner: AsyncRunner,
+        _runner: AsyncRunner,
     ) -> Result<Arc<dyn AsyncInstrument>> {
         Ok(Arc::new(NoopAsyncInstrument))
     }
 
     fn record_batch_with_context(
         &self,
-        cx: &Context,
-        labels: &[KeyValue],
-        measurements: Vec<Measurement>,
+        _cx: &Context,
+        _labels: &[KeyValue],
+        _measurements: Vec<Measurement>,
     ) {
         // Ignored
     }

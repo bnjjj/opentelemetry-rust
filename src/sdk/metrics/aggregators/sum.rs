@@ -21,20 +21,20 @@ pub struct SumAggregator {
 impl Aggregator for SumAggregator {
     fn update_with_context(
         &self,
-        cx: &Context,
+        _cx: &Context,
         number: &Number,
         descriptor: &Descriptor,
     ) -> Result<()> {
         self.current.add(descriptor.number_kind(), number);
         Ok(())
     }
-    fn checkpoint(&self, descriptor: &Descriptor) {
+    fn checkpoint(&self, _descriptor: &Descriptor) {
         todo!()
     }
     fn merge(
         &self,
-        other: &Arc<dyn Aggregator + Send + Sync>,
-        descriptor: &Descriptor,
+        _other: &Arc<dyn Aggregator + Send + Sync>,
+        _descriptor: &Descriptor,
     ) -> Result<()> {
         todo!()
     }

@@ -40,10 +40,10 @@ impl Number {
 
     /// TODO
     pub fn add(&self, number_kind: &NumberKind, other: &Number) {
-        let current = self.0.load(Ordering::Acquire);
-        let other = other.0.load(Ordering::Acquire);
         match number_kind {
             NumberKind::F64 => loop {
+                let current = self.0.load(Ordering::Acquire);
+                let other = other.0.load(Ordering::Acquire);
                 let new = f64::from_bits(current) + f64::from_bits(other);
                 let swapped = self
                     .0
@@ -53,6 +53,8 @@ impl Number {
                 }
             },
             NumberKind::U64 => loop {
+                let current = self.0.load(Ordering::Acquire);
+                let other = other.0.load(Ordering::Acquire);
                 let new = current + other;
                 let swapped = self.0.compare_and_swap(current, new, Ordering::Release);
                 if swapped == current {

@@ -35,7 +35,8 @@ fn init_meter() -> metrics::Result<PushController> {
     exporter::metrics::stdout(tokio::spawn, tokio::time::interval)
         .with_quantiles(vec![0.5, 0.9, 0.99])
         .with_pretty_print(false)
-        .with_period(Duration::from_millis(250))
+        .with_period(Duration::from_millis(20))
+        .with_error_handler(|err| eprintln!("~~~~~~~~ERROR: {:?}~~~~~~~~~", err))
         .try_init()
 }
 
@@ -98,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    tokio::time::delay_for(Duration::from_millis(600)).await;
+    tokio::time::delay_for(Duration::from_millis(25)).await;
 
     Ok(())
 }

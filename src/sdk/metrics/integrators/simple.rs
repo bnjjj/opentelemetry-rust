@@ -34,37 +34,12 @@ pub struct SimpleIntegrator {
 }
 
 impl SimpleIntegrator {
-    // TODO
-    // pub fn checkpoint_set(&self) -> Iter {
-    //     self.into_iter()
-    // }
-    // TODO
-    // pub fn finished_collection(&self) {
-    //     if !self.stateful {
-    //         println!("CLEARING BATCH");
-    //         // self.batch.clear();
-    //     }
-    // }
-    // /// TODO
-    // pub fn write<F, T>(&self, mut f: F) -> Result<T>
-    // where
-    //     F: FnMut(&mut SimpleIntegratorInner) -> Result<T>,
-    // {
-    //     println!("SimpleIntegrator write locking");
-    //     self.inner
-    //         .write()
-    //         .map_err(|lock_err| MetricsError::Other(lock_err.to_string()))
-    //         .and_then(|mut inner| {
-    //             println!("write lock success");
-    //             f(&mut inner)
-    //         })
-    // }
     /// TODO
     pub fn lock(&self) -> Result<SimpleLockedIntegrator<'_>> {
         self.batch
-            .try_lock()
+            .lock()
             .map_err(From::from)
-            .map(move |mut locked| SimpleLockedIntegrator {
+            .map(|locked| SimpleLockedIntegrator {
                 parent: self,
                 batch: locked,
             })
@@ -95,20 +70,13 @@ impl<'a> LockedIntegrator for SimpleLockedIntegrator<'a> {
         let key = BatchKey(hasher.finish());
         let agg = record.aggregator();
         let mut new_agg = None;
-        println!(
-            "processing record, existing batch len: {}",
-            self.batch.0.len()
-        );
         if let Some(value) = self.batch.0.get(&key) {
             // Note: The call to Merge here combines only
             // identical records.  It is required even for a
             // stateless Integrator because such identical records
             // may arise in the Meter implementation due to race
             // conditions.
-            dbg!("MERGING", desc);
             return value.aggregator.merge(agg, desc);
-        } else {
-            println!("No batch entry for: {:?}", desc);
         }
         // If this integrator is stateful, create a copy of the
         // Aggregator for long-term storage.  Otherwise the
@@ -119,14 +87,10 @@ impl<'a> LockedIntegrator for SimpleLockedIntegrator<'a> {
             // is effectively a Clone() operation.
             new_agg = self.parent.aggregation_selector().aggregator_for(desc);
             if let Some(new_agg) = new_agg.as_ref() {
-                println!("MERGING STATEFUL: {:?}", desc);
-                if let Err(err) = new_agg.merge(agg, desc) {
-                    return Err(err);
-                }
+                new_agg.merge(agg, desc)?;
             }
         }
 
-        println!("INSERTING INTO INTEGRATOR BATCH: {:?}", desc);
         self.batch.0.insert(
             key,
             BatchValue {
@@ -147,7 +111,6 @@ impl<'a> LockedIntegrator for SimpleLockedIntegrator<'a> {
 
     fn finished_collection(&mut self) {
         if !self.parent.stateful {
-            println!("CLEARING BATCH");
             self.batch.0.clear();
         }
     }
@@ -168,18 +131,6 @@ impl CheckpointSet for SimpleIntegratorBatch {
         })
     }
 }
-
-// fn process_record<'a>(
-//     guard: dashmap::ElementGuard<BatchKey, BatchValue>,
-//     f: &dyn Fn(Record<'a>) -> Result<()>,
-// ) -> Result<()> {
-//     f(Record::new(
-//         &guard.descriptor,
-//         &guard.labels,
-//         &guard.resource,
-//         &guard.aggregator,
-//     ))
-// }
 
 /// TODO
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -1,5 +1,6 @@
 //! OpenTelemetry Labels
 use crate::api::{KeyValue, Value};
+use std::cmp;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
@@ -130,6 +131,31 @@ impl<'a> Iterator for Iter<'a> {
 /// between Sets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Distinct(Vec<KeyValue>);
+
+impl cmp::Ord for Distinct {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+impl cmp::PartialOrd for Distinct {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        for idx in 0..self.0.len() {
+            match (self.0.get(idx).as_ref(), other.0.get(idx).as_ref()) {
+                (Some(_), None) => return Some(cmp::Ordering::Greater),
+                (Some(kv), Some(other_kv)) => return Some(kv.key.cmp(&other_kv.key)),
+                _ => unreachable!(),
+            }
+        }
+
+        if other.0.len() > self.0.len() {
+            // Equal elements, but other has more
+            Some(cmp::Ordering::Less)
+        } else {
+            // ALl equal elements
+            Some(cmp::Ordering::Equal)
+        }
+    }
+}
 
 impl Distinct {
     /// TODO

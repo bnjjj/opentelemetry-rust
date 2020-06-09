@@ -2,15 +2,16 @@
 use crate::api::labels;
 use crate::api::{
     metrics,
-    metrics::{MetricsError, Number, Result},
+    metrics::{MetricsError, Result},
 };
 use crate::global;
 use crate::sdk::{
-    export::metrics::{CheckpointSet, Exporter, Record},
+    export::metrics::{CheckpointSet, Exporter},
     metrics::{
         aggregators::{DistributionAggregator, MinMaxSumCountAggregator, SumAggregator},
         controllers::{self, PushController, PushControllerWorker},
         selectors::simple,
+        ErrorHandler,
     },
 };
 use futures::Stream;
@@ -83,7 +84,7 @@ where
 
             let mut expose = ExpoLine::default();
 
-            if let Some(sum) = agg.as_any().downcast_ref::<SumAggregator>() {
+            if let Some(_sum) = agg.as_any().downcast_ref::<SumAggregator>() {
                 todo!("SUM")
                 // expose.sum = sum.sum()?;
             }
@@ -93,7 +94,7 @@ where
                 expose.max = Some(mmsc.max()?.to_debug(kind));
                 expose.min = Some(mmsc.min()?.to_debug(kind));
 
-                if let Some(dist) = agg.as_any().downcast_ref::<DistributionAggregator>() {
+                if let Some(_dist) = agg.as_any().downcast_ref::<DistributionAggregator>() {
                     if !self.quantiles.is_empty() {
                         todo!()
                         // summary := make([]expoQuantile, len(e.config.Quantiles))
@@ -181,6 +182,7 @@ pub struct StdoutExporterBuilder<W, S, I> {
     quantiles: Option<Vec<f64>>,
     label_encoder: Option<Box<dyn labels::Encoder + Send + Sync>>,
     period: Option<Duration>,
+    error_handler: Option<ErrorHandler>,
 }
 
 impl<W, S, SO, I, IS, ISI> StdoutExporterBuilder<W, S, I>
@@ -200,6 +202,7 @@ where
             quantiles: None,
             label_encoder: None,
             period: None,
+            error_handler: None,
         }
     }
     /// TODO
@@ -213,6 +216,7 @@ where
             quantiles: self.quantiles,
             label_encoder: self.label_encoder,
             period: self.period,
+            error_handler: self.error_handler,
         }
     }
 
@@ -260,13 +264,30 @@ where
     }
 
     /// TODO
-    pub fn try_init(self) -> metrics::Result<PushController> {
-        let (spawn, interval, exporter, period) = self.try_build()?;
+    pub fn with_error_handler<T>(self, handler: T) -> Self
+    where
+        T: Fn(MetricsError) + Send + Sync + 'static,
+    {
+        StdoutExporterBuilder {
+            error_handler: Some(ErrorHandler::new(handler)),
+            ..self
+        }
+    }
+
+    /// TODO
+    pub fn try_init(mut self) -> metrics::Result<PushController> {
+        let period = self.period.take();
+        let error_handler = self.error_handler.take();
+        let (spawn, interval, exporter) = self.try_build()?;
         let mut push_builder =
             controllers::push(simple::Selector::Exact, exporter, spawn, interval)
                 .with_stateful(true);
         if let Some(period) = period {
             push_builder = push_builder.with_period(period);
+        }
+
+        if let Some(error_handler) = error_handler {
+            push_builder = push_builder.with_error_handler(error_handler);
         }
         let controller = push_builder.build();
         global::set_meter_provider(controller.provider());
@@ -274,7 +295,7 @@ where
     }
 
     /// TODO
-    fn try_build(self) -> metrics::Result<(S, I, StdoutExporter<W>, Option<Duration>)> {
+    fn try_build(self) -> metrics::Result<(S, I, StdoutExporter<W>)> {
         if let Some(quantiles) = self.quantiles.as_ref() {
             for q in quantiles {
                 if *q < 0.0 || *q > 1.0 {
@@ -293,7 +314,6 @@ where
                 quantiles: self.quantiles.unwrap_or(vec![0.5, 0.9, 0.99]),
                 label_encoder: self.label_encoder.unwrap_or_else(labels::default_encoder),
             },
-            self.period,
         ))
     }
 }

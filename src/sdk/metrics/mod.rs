@@ -109,10 +109,10 @@ impl AccumulatorBuilder {
 #[derive(Debug, Clone)]
 pub struct Accumulator(Arc<AccumulatorCore>);
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct MapKey {
     descriptor_hash: u64,
-    ordered: labels::Distinct,
+    ordered_hash: u64,
 }
 
 #[derive(Debug)]
@@ -174,7 +174,7 @@ impl AsyncInstrumentState {
 struct AccumulatorCore {
     // current maps `mapkey` to *record.
     // current: dashmap::DashMap<MapKey, Record>,
-    current: dashmap::DashMap<MapKey, Arc<Record>>,
+    current: flurry::HashMap<MapKey, Arc<Record>>,
     //
     // // asyncInstruments is a set of
     async_instruments: Mutex<AsyncInstrumentState>,
@@ -208,7 +208,7 @@ impl AccumulatorCore {
         error_handler: Option<ErrorHandler>,
     ) -> Self {
         AccumulatorCore {
-            current: dashmap::DashMap::default(),
+            current: flurry::HashMap::new(),
             async_instruments: Mutex::new(AsyncInstrumentState {
                 runners: Vec::default(),
             }),
@@ -225,7 +225,7 @@ impl AccumulatorCore {
         runner: AsyncRunner,
     ) -> Result<()> {
         self.async_instruments
-            .try_lock()
+            .lock()
             .map_err(|lock_err| MetricsError::Other(lock_err.to_string()))
             .map(|mut async_instruments| {
                 async_instruments.runners.push((runner, instrument));
@@ -262,27 +262,32 @@ impl AccumulatorCore {
 
     fn collect_sync_instruments(&self, locked_integrator: &mut dyn LockedIntegrator) -> usize {
         let mut checkpointed = 0;
+        let current_pin = self.current.pin();
 
-        self.current.retain(|_key, value| {
+        for (key, value) in current_pin.iter() {
             let mods = &value.update_count;
             let coll = &value.collected_count;
 
-            println!("--coll {:?}", coll.to_debug(&NumberKind::U64));
-            if dbg!(mods.partial_cmp(&NumberKind::U64, coll) != Some(Ordering::Equal)) {
+            if mods.partial_cmp(&NumberKind::U64, coll) != Some(Ordering::Equal) {
                 // Updates happened in this interval,
                 // checkpoint and continue.
                 checkpointed += self.checkpoint_record(value, locked_integrator);
-                println!(
-                    "--- assigning collected count to {:?}",
-                    mods.to_debug(&NumberKind::U64)
-                );
                 value.collected_count.assign(&NumberKind::U64, mods);
-                return true;
             } else {
-                // TODO check of there are other cases here
-                return false;
+                // Having no updates since last collection, try to remove if
+                // there are no bound handles
+                if Arc::strong_count(&value) == 1 {
+                    current_pin.remove(key);
+
+                    // There's a potential race between loading collected count and
+                    // loading the strong count in this function.  Since this is the
+                    // last we'll see of this record, checkpoint.
+                    if mods.partial_cmp(&NumberKind::U64, coll) != Some(Ordering::Equal) {
+                        checkpointed += self.checkpoint_record(value, locked_integrator);
+                    }
+                }
             }
-        });
+        }
 
         checkpointed
     }
@@ -329,7 +334,7 @@ impl AccumulatorCore {
         instrument: &AsyncInstrument,
         locked_integrator: &mut dyn LockedIntegrator,
     ) -> usize {
-        instrument.recorders.try_lock().map_or(0, |mut recorders| {
+        instrument.recorders.lock().map_or(0, |mut recorders| {
             let mut checkpointed = 0;
             match recorders.as_mut() {
                 None => return checkpointed,
@@ -376,19 +381,25 @@ impl SyncInstrument {
         self.instrument.descriptor.hash(&mut hasher);
         let descriptor_hash = hasher.finish();
 
+        let distinct = labels::Distinct::from(labels);
+
+        let mut hasher = DefaultHasher::new();
+        distinct.hash(&mut hasher);
+        let ordered_hash = hasher.finish();
+
         let map_key = MapKey {
             descriptor_hash,
-            ordered: labels::Distinct::from(labels),
+            ordered_hash,
         };
-
-        if let Some(existing_record) = self.instrument.meter.0.current.get(&map_key) {
-            return existing_record.value().clone();
+        let current_pin = self.instrument.meter.0.current.pin();
+        if let Some(existing_record) = current_pin.get(&map_key) {
+            return existing_record.clone();
         }
 
         let record = Arc::new(Record {
             update_count: Number::default(),
             collected_count: Number::default(),
-            labels: labels::Set::with_equivalent(map_key.ordered.clone()),
+            labels: labels::Set::with_equivalent(distinct),
             instrument: self.clone(),
             recorder: self
                 .instrument
@@ -398,11 +409,7 @@ impl SyncInstrument {
                 .aggregation_selector()
                 .aggregator_for(&self.instrument.descriptor),
         });
-        self.instrument
-            .meter
-            .0
-            .current
-            .insert(map_key, record.clone());
+        current_pin.insert(map_key, record.clone());
 
         record
     }
@@ -461,7 +468,7 @@ impl AsyncInstrument {
     }
 
     fn get_recorder(&self, labels: &labels::Set) -> Option<Arc<dyn Aggregator + Send + Sync>> {
-        self.recorders.try_lock().map_or(None, |mut recorders| {
+        self.recorders.lock().map_or(None, |mut recorders| {
             let mut hasher = DefaultHasher::new();
             labels.equivalent().hash(&mut hasher);
             let label_hash = hasher.finish();
@@ -570,35 +577,24 @@ impl sdk_api::BoundSyncInstrument for Record {
     fn record_one_with_context<'a>(&self, cx: &Context, number: Number) {
         // check if the instrument is disabled according to the AggregationSelector.
         if let Some(recorder) = &self.recorder {
-            if let Err(err) =
-                aggregator::range_test(&number, &self.instrument.instrument.descriptor)
-            {
-                if let Some(error_handler) = &self.instrument.instrument.meter.0.error_handler {
-                    error_handler.call(err);
-                }
-                return;
-            }
-            if let Err(err) =
+            if let Err(err) = aggregator::range_test(
+                &number,
+                &self.instrument.instrument.descriptor,
+            )
+            .and_then(|_| {
                 recorder.update_with_context(cx, &number, &self.instrument.instrument.descriptor)
-            {
+            }) {
                 if let Some(error_handler) = &self.instrument.instrument.meter.0.error_handler {
                     error_handler.call(err);
                 }
                 return;
             }
+
             // Record was modified, inform the Collect() that things need
             // to be collected while the record is still mapped.
-            println!(
-                "BUMPING UPDATED COUNT FOR: {:?}",
-                &self.instrument.instrument.descriptor,
-            );
             self.update_count.add(&NumberKind::U64, &1u64.into());
         }
     }
-
-    // fn as_any(&self) -> &dyn Any {
-    //     self
-    // }
 }
 
 ///TODO
@@ -655,7 +651,7 @@ impl sdk_api::MeterCore for Accumulator {
             recorders: Arc::new(Mutex::new(None)),
         });
 
-        self.0.register(instrument.clone(), runner);
+        self.0.register(instrument.clone(), runner)?;
 
         Ok(instrument)
     }
