@@ -1,7 +1,7 @@
 //! OpenTelemetry Labels
 use crate::api::{KeyValue, Value};
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const MAX_CONCURRENT_ENCODERS: usize = 3;
 
@@ -18,10 +18,26 @@ pub use encoder::{default_encoder, new_encoder_id, DefaultLabelEncoder, Encoder,
 /// 1. Metric labels
 /// 2. Resource sets
 /// 3. Correlation map (TODO)
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Set {
     equivalent: Distinct,
-    cached_encodings: Mutex<[Option<(EncoderId, String)>; MAX_CONCURRENT_ENCODERS]>,
+    cached_encodings: Arc<Mutex<[Option<(EncoderId, String)>; MAX_CONCURRENT_ENCODERS]>>,
+}
+
+impl From<&[KeyValue]> for Set {
+    fn from(kvs: &[KeyValue]) -> Self {
+        if kvs.is_empty() {
+            return Set::default();
+        }
+        let mut inner = kvs.to_vec();
+        inner.sort_by(|a, b| a.key.cmp(&b.key));
+        inner.dedup_by(|a, b| a.key.eq(&b.key));
+
+        Set {
+            equivalent: Distinct(inner),
+            cached_encodings: Arc::new(Mutex::new([None, None, None])),
+        }
+    }
 }
 
 impl Set {
@@ -29,16 +45,98 @@ impl Set {
     pub fn with_equivalent(equivalent: Distinct) -> Self {
         Set {
             equivalent,
-            cached_encodings: Mutex::new([None, None, None]),
+            cached_encodings: Arc::new(Mutex::new([None, None, None])),
         }
+    }
+
+    /// TODO
+    pub fn equivalent(&self) -> &Distinct {
+        &self.equivalent
+    }
+
+    /// TODO
+    pub fn is_empty(&self) -> bool {
+        self.equivalent.is_empty()
+    }
+
+    /// TODO
+    pub fn iter(&self) -> Iter {
+        self.into_iter()
+    }
+
+    /// TODO
+    pub fn encoded(&self, encoder: Option<&dyn Encoder>) -> String {
+        if self.is_empty() || encoder.is_none() {
+            return String::new();
+        }
+        let encoder = encoder.unwrap();
+
+        let id = encoder.id();
+        if !id.is_valid() {
+            // Invalid IDs are not cached.
+            return encoder.encode(&mut self.iter());
+        }
+
+        self.cached_encodings
+            .lock()
+            .map_or(String::new(), |mut encoders| {
+                for idx in 0..MAX_CONCURRENT_ENCODERS {
+                    if let Some((_, encoded)) = &encoders[idx] {
+                        // FIXME can we return ref instead?
+                        return encoded.clone();
+                    }
+                }
+
+                let r = encoder.encode(&mut self.iter());
+
+                for idx in 0..MAX_CONCURRENT_ENCODERS {
+                    if !encoders[idx]
+                        .as_ref()
+                        .map_or(false, |(id, _)| id.is_valid())
+                    {
+                        encoders[idx] = Some((id, r.clone()));
+                        return r;
+                    }
+                }
+
+                // TODO: This is a performance cliff.  Find a way for this to
+                // generate a warning.
+                return r;
+            })
+    }
+}
+
+impl<'a> IntoIterator for &'a Set {
+    type Item = &'a KeyValue;
+    type IntoIter = Iter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Iter(self.equivalent.0.iter())
+    }
+}
+/// An iterator over the entries of a `SimpleIntegratorInner`.
+#[allow(missing_debug_implementations)]
+pub struct Iter<'a>(std::slice::Iter<'a, KeyValue>);
+impl<'a> Iterator for Iter<'a> {
+    type Item = &'a KeyValue;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
     }
 }
 
 /// Distinct wraps a variable-size array of `kv.KeyValue`, constructed with keys
 /// in sorted order. This can be used as a map key or for equality checking
 /// between Sets.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Distinct(Vec<KeyValue>);
+
+impl Distinct {
+    /// TODO
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 impl From<&[KeyValue]> for Distinct {
     fn from(kvs: &[KeyValue]) -> Self {

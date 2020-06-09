@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+lazy_static = "1.4.0"
+opentelemetry = { path = "../../", features = ["serde"] }
+opentelemetry-jaeger = { path = "../../opentelemetry-jaeger" }
+serde_json = "1.0"
 thrift = "0.13"
 tokio = { version = "0.2.21", features = ["full"] }
-lazy_static = "1.4.0"
-opentelemetry = { path = "../../" }
-opentelemetry-jaeger = { path = "../../opentelemetry-jaeger" }

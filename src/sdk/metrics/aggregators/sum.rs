@@ -1,5 +1,9 @@
-use crate::api::{metrics::Number, Context};
+use crate::api::{
+    metrics::{Descriptor, Number, Result},
+    Context,
+};
 use crate::sdk::export::metrics::Aggregator;
+use std::any::Any;
 use std::sync::Arc;
 
 /// TODO
@@ -18,20 +22,23 @@ impl Aggregator for SumAggregator {
     fn update_with_context(
         &self,
         cx: &Context,
-        number: Number,
-        descriptor: &crate::api::metrics::Descriptor,
-    ) -> Result<(), crate::api::metrics::MetricsError> {
-        self.current.add(&descriptor.number_kind, number);
+        number: &Number,
+        descriptor: &Descriptor,
+    ) -> Result<()> {
+        self.current.add(descriptor.number_kind(), number);
         Ok(())
     }
-    fn checkpoint(&self, descriptor: &crate::api::metrics::Descriptor) {
+    fn checkpoint(&self, descriptor: &Descriptor) {
         todo!()
     }
     fn merge(
-        self,
-        other: Box<dyn Aggregator>,
-        descriptor: crate::api::metrics::Descriptor,
-    ) -> Result<(), crate::api::metrics::MetricsError> {
+        &self,
+        other: &Arc<dyn Aggregator + Send + Sync>,
+        descriptor: &Descriptor,
+    ) -> Result<()> {
         todo!()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

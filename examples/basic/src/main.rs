@@ -3,6 +3,7 @@ use opentelemetry::api::{Context, CorrelationContextExt, Key, KeyValue, TraceCon
 use opentelemetry::exporter;
 use opentelemetry::sdk::metrics::PushController;
 use opentelemetry::{global, sdk};
+use std::time::Duration;
 
 fn init_tracer() -> thrift::Result<()> {
     let exporter = opentelemetry_jaeger::Exporter::builder()
@@ -34,6 +35,7 @@ fn init_meter() -> metrics::Result<PushController> {
     exporter::metrics::stdout(tokio::spawn, tokio::time::interval)
         .with_quantiles(vec![0.5, 0.9, 0.99])
         .with_pretty_print(false)
+        .with_period(Duration::from_millis(250))
         .try_init()
 }
 
@@ -95,6 +97,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             value_recorder.record(1.3);
         });
     });
+
+    tokio::time::delay_for(Duration::from_millis(600)).await;
 
     Ok(())
 }

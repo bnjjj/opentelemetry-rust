@@ -1,5 +1,5 @@
 //! Metrics SDK API
-use crate::api::metrics::{Descriptor, Measurement, Number, Result, Runner};
+use crate::api::metrics::{AsyncRunner, Descriptor, Measurement, Number, Result};
 use crate::api::{Context, KeyValue};
 use std::any::Any;
 use std::fmt;
@@ -22,7 +22,7 @@ pub trait MeterCore: fmt::Debug {
     fn new_async_instrument(
         &self,
         descriptor: Descriptor,
-        runner: Runner,
+        runner: AsyncRunner,
     ) -> Result<Arc<dyn AsyncInstrument>>;
 }
 
@@ -61,4 +61,7 @@ pub trait BoundSyncInstrument: fmt::Debug {
 }
 
 /// TODO
-pub trait AsyncInstrument: Instrument {}
+pub trait AsyncInstrument: Instrument {
+    /// TODO
+    fn as_any(&self) -> &dyn Any;
+}

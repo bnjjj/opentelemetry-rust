@@ -1,12 +1,12 @@
 use crate::api::metrics::{Config, InstrumentKind, NumberKind};
 
 /// TODO
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct Descriptor {
-    pub(crate) name: String,
-    pub(crate) instrument_kind: InstrumentKind,
-    pub(crate) number_kind: NumberKind,
-    pub(crate) config: Config,
+    name: String,
+    instrument_kind: InstrumentKind,
+    number_kind: NumberKind,
+    config: Config,
 }
 
 impl Descriptor {
@@ -23,5 +23,30 @@ impl Descriptor {
             number_kind,
             config: Config::with_library_name(library_name),
         }
+    }
+
+    /// TODO
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+
+    /// TODO
+    pub fn instrument_kind(&self) -> &InstrumentKind {
+        &self.instrument_kind
+    }
+
+    /// TODO
+    pub fn number_kind(&self) -> &NumberKind {
+        &self.number_kind
+    }
+
+    /// TODO
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// TODO
+    pub fn config_mut(&mut self) -> &mut Config {
+        &mut self.config
     }
 }

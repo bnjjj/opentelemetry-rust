@@ -1,5 +1,9 @@
 //! Metrics Export
-use crate::api::{metrics, metrics::MetricsError};
+use crate::api::{
+    labels,
+    metrics::{Descriptor, Result},
+};
+use crate::sdk::resource::Resource;
 use std::fmt;
 use std::sync::Arc;
 
@@ -50,14 +54,13 @@ pub trait Integrator: fmt::Debug {
     ///
     /// The Context argument originates from the controller that
     /// orchestrates collection.
-    fn process(&self, record: Record) -> metrics::Result<()>;
+    fn process(&self, record: Record) -> Result<()>;
 }
 
 /// TODO
 pub trait AggregationSelector: fmt::Debug {
     /// TODO
-    fn aggregator_for(&self, descriptor: &metrics::Descriptor)
-        -> Arc<dyn Aggregator + Send + Sync>;
+    fn aggregator_for(&self, descriptor: &Descriptor) -> Option<Arc<dyn Aggregator + Send + Sync>>;
 }
 
 /// TODO
@@ -70,40 +73,71 @@ pub trait Exporter: fmt::Debug {
     ///
     /// The CheckpointSet interface refers to the Integrator that just
     /// completed collection.
-    fn export(&self, checkpoint_set: &dyn CheckpointSet) -> Result<(), MetricsError>;
+    fn export(&mut self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()>;
 }
 
 /// TODO
 pub trait CheckpointSet {
-    // // ForEach iterates over aggregated checkpoints for all
-    // // metrics that were updated during the last collection
-    // // period. Each aggregated checkpoint returned by the
-    // // function parameter may return an error.
-    // // ForEach tolerates ErrNoData silently, as this is
-    // // expected from the Meter implementation. Any other kind
-    // // of error will immediately halt ForEach and return
-    // // the error to the caller.
-    // ForEach(func(Record) error) error
-    //
-    // // Locker supports locking the checkpoint set.  Collection
-    // // into the checkpoint set cannot take place (in case of a
-    // // stateful integrator) while it is locked.
-    // //
-    // // The Integrator attached to the Accumulator MUST be called
-    // // with the lock held.
-    // sync.Locker
-    //
-    // // RLock acquires a read lock corresponding to this Locker.
-    // RLock()
-    // // RUnlock releases a read lock corresponding to this Locker.
-    // RUnlock()
+    /// TODO
+    fn try_for_each(&mut self, f: &mut dyn FnMut(&Record) -> Result<()>) -> Result<()>;
+}
+
+/// TODO
+pub fn record<'a>(
+    descriptor: &'a Descriptor,
+    labels: &'a labels::Set,
+    resource: &'a Arc<Resource>,
+    aggregator: &'a Arc<dyn Aggregator + Send + Sync>,
+) -> Record<'a> {
+    Record {
+        descriptor,
+        labels,
+        resource,
+        aggregator,
+    }
 }
 
 /// TODO
 #[derive(Debug)]
-pub struct Record {
-    // descriptor *metric.Descriptor
-// labels     *label.Set
-// resource   *resource.Resource
-// aggregator Aggregator
+pub struct Record<'a> {
+    descriptor: &'a Descriptor,
+    labels: &'a labels::Set,
+    resource: &'a Resource,
+    aggregator: &'a Arc<dyn Aggregator + Send + Sync>,
+}
+
+impl<'a> Record<'a> {
+    /// TODO
+    pub fn new(
+        descriptor: &'a Descriptor,
+        labels: &'a labels::Set,
+        resource: &'a Resource,
+        aggregator: &'a Arc<dyn Aggregator + Send + Sync>,
+    ) -> Self {
+        Record {
+            descriptor,
+            labels,
+            resource,
+            aggregator,
+        }
+    }
+    /// TODO
+    pub fn descriptor(&self) -> &Descriptor {
+        self.descriptor
+    }
+
+    /// TODO
+    pub fn labels(&self) -> &labels::Set {
+        self.labels
+    }
+
+    /// TODO
+    pub fn resource(&self) -> &Resource {
+        self.resource
+    }
+
+    /// TODO
+    pub fn aggregator(&self) -> &Arc<dyn Aggregator + Send + Sync> {
+        self.aggregator
+    }
 }

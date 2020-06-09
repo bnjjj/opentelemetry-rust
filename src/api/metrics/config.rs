@@ -1,7 +1,7 @@
 use crate::api::Unit;
 
 /// TODO
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct Config {
     pub(crate) description: Option<String>,
     pub(crate) unit: Option<Unit>,

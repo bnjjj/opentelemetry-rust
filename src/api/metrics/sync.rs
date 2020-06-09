@@ -19,6 +19,17 @@ pub struct Observation {
     instrument: Arc<dyn sdk_api::AsyncInstrument>,
 }
 
+impl Observation {
+    /// TODO
+    pub fn number(&self) -> &Number {
+        &self.number
+    }
+    /// TODO
+    pub fn instrument(&self) -> &Arc<dyn sdk_api::AsyncInstrument> {
+        &self.instrument
+    }
+}
+
 /// TODO
 pub struct F64ObserverResult {
     instrument: Arc<dyn sdk_api::AsyncInstrument>,
@@ -36,7 +47,7 @@ impl F64ObserverResult {
 }
 
 impl fmt::Debug for F64ObserverResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         todo!()
     }
 }
@@ -51,5 +62,35 @@ impl F64ObserverResult {
                 instrument: self.instrument.clone(),
             }],
         )
+    }
+}
+
+/// TODO
+pub enum AsyncRunner {
+    /// TODO
+    F64(Box<dyn Fn(F64ObserverResult) + Send + Sync + 'static>),
+}
+
+impl AsyncRunner {
+    /// TODO
+    pub fn run(
+        &self,
+        instrument: Arc<dyn sdk_api::AsyncInstrument>,
+        f: fn(&[KeyValue], &[Observation]),
+    ) {
+        match self {
+            AsyncRunner::F64(run) => run(F64ObserverResult::new(instrument, f)),
+        }
+    }
+}
+
+impl fmt::Debug for AsyncRunner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AsyncRunner::F64(_) => f
+                .debug_struct("AsyncRunner")
+                .field("closure", &"Fn(F64ObserverResult)")
+                .finish(),
+        }
     }
 }

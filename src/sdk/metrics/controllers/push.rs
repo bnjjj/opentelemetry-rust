@@ -61,7 +61,6 @@ enum PushMessage {
 #[allow(missing_debug_implementations)]
 pub struct PushControllerWorker {
     messages: Pin<Box<dyn Stream<Item = PushMessage> + Send>>,
-    provider: registry::RegistryMeterProvider,
     accumulator: Accumulator,
     integrator: Arc<SimpleIntegrator>,
     exporter: Box<dyn Exporter + Send + Sync>,
@@ -79,20 +78,17 @@ impl Future for PushControllerWorker {
                     // ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
                     // defer cancel()
 
-                    self.integrator
-                        .try_lock_inner(|_integrator| {
-                            self.accumulator.0.collect();
-                            //
-                            // self.exporter.export(integrator.checkpoint_set())?;
-                            // integrator.finished_collection();
-                            //
-                            // Ok(())
-                        })
-                        .map_err(|err| {
-                            if let Some(error_handler) = &self.error_handler {
-                                error_handler.call(err);
-                            }
-                        });
+                    // TODO see if single lock here can prevent each lock to process
+                    // self.integrator.try_lock()
+                    self.accumulator.0.collect();
+
+                    let mut checkpoint_set = self.integrator.checkpoint_set();
+                    if let Err(err) = self.exporter.export(&mut checkpoint_set) {
+                        if let Some(error_handler) = &self.error_handler {
+                            error_handler.call(err);
+                        }
+                    }
+                    self.integrator.finished_collection();
                 }
                 // Stream has terminated or processor is shutdown, return to finish execution.
                 None | Some(PushMessage::Shutdown) => {
@@ -146,6 +142,14 @@ where
         }
     }
 
+    /// TODO
+    pub fn with_period(self, period: time::Duration) -> Self {
+        PushControllerBuilder {
+            period: Some(period),
+            ..self
+        }
+    }
+
     pub fn with_error_handler<T>(self, error_handler: T) -> Self
     where
         T: Fn(MetricsError) + Send + Sync + 'static,
@@ -173,12 +177,14 @@ where
         let provider = registry::meter_provider(Arc::new(accumulator.clone()));
 
         let (message_sender, message_receiver) = mpsc::channel(256);
-        let ticker = (self.interval)(self.period.unwrap_or(DEFAULT_PUSH_PERIOD.clone()))
-            .map(|_| PushMessage::Tick);
+        let ticker = (self.interval)(
+            self.period
+                .unwrap_or_else(|| dbg!(DEFAULT_PUSH_PERIOD.clone())),
+        )
+        .map(|_| PushMessage::Tick);
 
         (self.spawn)(PushControllerWorker {
             messages: Box::pin(futures::stream::select(message_receiver, ticker)),
-            provider: provider.clone(),
             accumulator,
             integrator,
             exporter: self.exporter,

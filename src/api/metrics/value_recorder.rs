@@ -83,7 +83,7 @@ impl<'a, T> ValueRecorderBuilder<'a, T> {
 
     /// TODO
     pub fn with_description<S: Into<String>>(mut self, description: S) -> Self {
-        self.descriptor.config.description = Some(description.into());
+        self.descriptor.config_mut().description = Some(description.into());
         self
     }
 

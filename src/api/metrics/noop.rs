@@ -6,7 +6,7 @@
 use crate::api::{
     metrics::{
         sdk_api::{AsyncInstrument, BoundSyncInstrument, Instrument, MeterCore, SyncInstrument},
-        Descriptor, Measurement, Meter, MeterProvider, Number, Result, Runner,
+        AsyncRunner, Descriptor, Measurement, Meter, MeterProvider, Number, Result,
     },
     Context, KeyValue,
 };
@@ -34,7 +34,7 @@ impl MeterCore for NoopMeterCore {
     fn new_async_instrument(
         &self,
         _descriptor: Descriptor,
-        runner: Runner,
+        runner: AsyncRunner,
     ) -> Result<Arc<dyn AsyncInstrument>> {
         Ok(Arc::new(NoopAsyncInstrument))
     }
@@ -90,7 +90,11 @@ impl Instrument for NoopAsyncInstrument {
     }
 }
 
-impl AsyncInstrument for NoopAsyncInstrument {}
+impl AsyncInstrument for NoopAsyncInstrument {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 // /// A no-op instance of a `Meter`.
 // #[derive(Clone, Debug)]

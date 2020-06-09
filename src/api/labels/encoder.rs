@@ -1,4 +1,4 @@
-use crate::api;
+use crate::api::KeyValue;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -9,7 +9,7 @@ pub trait Encoder: fmt::Debug {
     /// Encode returns the serialized encoding of the label
     /// set using its Iterator.  This result may be cached
     /// by a label.Set.
-    fn encode(&self, labels: Vec<api::KeyValue>) -> String;
+    fn encode(&self, labels: &mut dyn Iterator<Item = &KeyValue>) -> String;
 
     /// ID returns a value that is unique for each class of
     /// label encoder.  Label encoders allocate these using
@@ -22,17 +22,31 @@ pub trait Encoder: fmt::Debug {
 #[derive(Debug)]
 pub struct EncoderId(usize);
 
+impl EncoderId {
+    /// TODO
+    pub fn is_valid(&self) -> bool {
+        self.0 != 0
+    }
+}
+
 /// TODO
 #[derive(Debug)]
 pub struct DefaultLabelEncoder;
 
 impl Encoder for DefaultLabelEncoder {
-    fn encode(&self, labels: Vec<api::KeyValue>) -> String {
+    fn encode(&self, labels: &mut dyn Iterator<Item = &KeyValue>) -> String {
         // TODO fix horrible perf
         labels
-            .into_iter()
-            .map(|kv| format!("{}={}", kv.key.as_str(), String::from(kv.value)))
-            .collect()
+            .enumerate()
+            .fold(String::new(), |mut acc, (idx, kv)| {
+                if idx > 0 {
+                    acc.push_str(",")
+                }
+                acc.push_str(kv.key.as_str());
+                acc.push_str("=");
+                acc.push_str(String::from(&kv.value).as_str());
+                acc
+            })
     }
 
     fn id(&self) -> EncoderId {

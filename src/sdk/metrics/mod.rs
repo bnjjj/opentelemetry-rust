@@ -1,15 +1,20 @@
 //! # OpenTelemetry Metrics SDK
 use crate::api::metrics::{
-    sdk_api::{self, AsyncInstrument as _, BoundSyncInstrument as _},
-    Descriptor, Measurement, MetricsError, Number, NumberKind, Observation, Result, Runner,
+    sdk_api::{self, BoundSyncInstrument as _},
+    AsyncRunner, Descriptor, Measurement, MetricsError, Number, NumberKind, Observation, Result,
 };
 use crate::api::{labels, Context, KeyValue};
 use crate::sdk::{
-    export::metrics::{aggregator, Aggregator, Integrator},
+    export::{
+        self,
+        metrics::{aggregator, Aggregator, Integrator},
+    },
     resource::Resource,
 };
 use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
@@ -122,22 +127,28 @@ struct AsyncInstrumentState {
     // runner_map: HashMap<Runner, Any>,
     /// runners maintains the set of runners in the order they were
     /// registered.
-    runners: Vec<Runner>,
-
-    /// instruments maintains the set of instruments in the order
-    /// they were registered.
-    instruments: Vec<Arc<dyn sdk_api::AsyncInstrument + Send + Sync>>,
+    runners: Vec<(AsyncRunner, Arc<dyn sdk_api::AsyncInstrument + Send + Sync>)>,
+    // instruments maintains the set of instruments in the order
+    // they were registered.
 }
 
-trait AsyncCollector {
-    fn collect_async(&self, _labels: &[KeyValue], _observations: Vec<Observation>) {
-        todo!()
+fn collect_async(labels: &[KeyValue], observations: &[Observation]) {
+    let labels = labels::Set::from(labels);
+
+    for observation in observations {
+        if let Some(instrument) = observation
+            .instrument()
+            .as_any()
+            .downcast_ref::<AsyncInstrument>()
+        {
+            instrument.observe(observation.number(), &labels)
+        }
     }
 }
 
 impl AsyncInstrumentState {
-    fn run(&self, collector: &dyn AsyncCollector) {
-        for rp in self.runners.iter() {
+    fn run(&self) {
+        for (runner, instrument) in self.runners.iter() {
             // // The runner must be a single or batch runner, no
             // // other implementations are possible because the
             // // interface has un-exported methods.
@@ -153,13 +164,10 @@ impl AsyncInstrumentState {
             // if let Some(error_handler) = collector.error_handler() {
             //     error_handler.call(MetricsError::InvalidAsyncRunner(format!("{:?}", rp)))
             // }
-            todo!()
-            // rp.run(rp.instrument, self.collect_async)
+            runner.run(instrument.clone(), collect_async)
         }
     }
 }
-
-impl AsyncCollector for AsyncInstrumentState {}
 
 /// TODO
 #[derive(Debug)]
@@ -174,7 +182,7 @@ struct AccumulatorCore {
     //
     // // currentEpoch is the current epoch number. It is
     // // incremented in `Collect()`.
-    current_epoch: u64,
+    current_epoch: Number,
     //
     // // integrator is the configured integrator+configuration.
     integrator: Arc<dyn Integrator + Send + Sync>,
@@ -203,9 +211,8 @@ impl AccumulatorCore {
             current: dashmap::DashMap::default(),
             async_instruments: Mutex::new(AsyncInstrumentState {
                 runners: Vec::default(),
-                instruments: Vec::default(),
             }),
-            current_epoch: 0,
+            current_epoch: NumberKind::U64.zero(),
             integrator,
             error_handler,
             resource: Arc::new(Resource::default()),
@@ -215,25 +222,22 @@ impl AccumulatorCore {
     fn register(
         &self,
         instrument: Arc<dyn sdk_api::AsyncInstrument + Send + Sync>,
-        runner: Runner,
+        runner: AsyncRunner,
     ) -> Result<()> {
         self.async_instruments
             .try_lock()
             .map_err(|lock_err| MetricsError::Other(lock_err.to_string()))
             .map(|mut async_instruments| {
-                async_instruments.instruments.push(instrument);
-                async_instruments.runners.push(runner);
+                async_instruments.runners.push((runner, instrument));
             })
     }
 
     fn collect(&self) -> usize {
         let mut checkpointed = self.observe_async_instruments();
-        // checkpointed += self.collect_sync_instruments();
+        checkpointed += self.collect_sync_instruments();
+        self.current_epoch.add(&NumberKind::U64, &1u64.into());
 
-        todo!()
-        // self.current_epoch += 1;
-
-        // checkpointed
+        checkpointed
     }
 
     fn observe_async_instruments(&self) -> usize {
@@ -243,17 +247,108 @@ impl AccumulatorCore {
                 let mut async_collected = 0;
                 // self.async_context = cx;
 
-                async_instruments.run(&*async_instruments);
+                async_instruments.run();
                 // m.asyncContext = None;
 
-                for inst in &async_instruments.instruments {
-                    // if let Some(a) = self.from_async(inst) {
-                    //     async_collected += self.checkpoint_async(a);
-                    // }
+                for (_runner, instrument) in &async_instruments.runners {
+                    if let Some(a) = instrument.as_any().downcast_ref::<AsyncInstrument>() {
+                        async_collected += self.checkpoint_async(a);
+                    }
                 }
 
                 async_collected
             })
+    }
+
+    fn collect_sync_instruments(&self) -> usize {
+        let mut checkpointed = 0;
+
+        self.current.retain(|_key, value| {
+            let mods = &value.update_count;
+            let coll = &value.collected_count;
+
+            println!("--coll {:?}", coll.to_debug(&NumberKind::U64));
+            if dbg!(mods.partial_cmp(&NumberKind::U64, coll) != Some(Ordering::Equal)) {
+                // Updates happened in this interval,
+                // checkpoint and continue.
+                checkpointed += self.checkpoint_record(value);
+                println!(
+                    "--- assigning collected count to {:?}",
+                    mods.to_debug(&NumberKind::U64)
+                );
+                value.collected_count.assign(&NumberKind::U64, mods);
+                return true;
+            } else {
+                // TODO check of there are other cases here
+                return false;
+            }
+        });
+
+        checkpointed
+    }
+
+    fn checkpoint(
+        &self,
+        descriptor: &Descriptor,
+        recorder: Option<&Arc<dyn Aggregator + Send + Sync>>,
+        labels: &labels::Set,
+    ) -> usize {
+        match recorder {
+            None => 0,
+            Some(recorder) => {
+                recorder.checkpoint(descriptor);
+
+                let export_record =
+                    export::metrics::record(descriptor, labels, &self.resource, recorder);
+                if let Err(_err) = self.integrator.process(export_record) {
+                    todo!()
+                    // global::handle(err)
+                }
+
+                1
+            }
+        }
+    }
+
+    fn checkpoint_record(&self, record: &Record) -> usize {
+        self.checkpoint(
+            &record.instrument.instrument.descriptor,
+            record.recorder.as_ref(),
+            &record.labels,
+        )
+    }
+
+    fn checkpoint_async(&self, instrument: &AsyncInstrument) -> usize {
+        instrument.recorders.try_lock().map_or(0, |mut recorders| {
+            let mut checkpointed = 0;
+            match recorders.as_mut() {
+                None => return checkpointed,
+                Some(recorders) => {
+                    recorders.retain(|_key, label_recorder| {
+                        let epoch_diff = self
+                            .current_epoch
+                            .partial_cmp(&NumberKind::U64, &label_recorder.observed_epoch.into());
+                        if epoch_diff == Some(Ordering::Equal) {
+                            checkpointed += self.checkpoint(
+                                // m.asyncContext,
+                                &instrument.instrument.descriptor,
+                                label_recorder.recorder.as_ref(),
+                                &label_recorder.labels,
+                            )
+                        }
+
+                        // Retain if this is not second collection cycle with no
+                        // observations for this labelset.
+                        epoch_diff == Some(Ordering::Greater)
+                    });
+                }
+            }
+            if recorders.as_ref().map_or(false, |map| map.is_empty()) {
+                *recorders = None;
+            }
+
+            checkpointed
+        })
     }
 }
 
@@ -276,23 +371,27 @@ impl SyncInstrument {
         };
 
         if let Some(existing_record) = self.instrument.meter.0.current.get(&map_key) {
-            return existing_record.clone();
+            return existing_record.value().clone();
         }
 
         let record = Arc::new(Record {
             update_count: Number::default(),
             collected_count: Number::default(),
-            labels: labels::Set::with_equivalent(map_key.ordered),
+            labels: labels::Set::with_equivalent(map_key.ordered.clone()),
             instrument: self.clone(),
-            recorder: Some(
-                self.instrument
-                    .meter
-                    .0
-                    .integrator
-                    .aggregation_selector()
-                    .aggregator_for(&self.instrument.descriptor),
-            ),
+            recorder: self
+                .instrument
+                .meter
+                .0
+                .integrator
+                .aggregation_selector()
+                .aggregator_for(&self.instrument.descriptor),
         });
+        self.instrument
+            .meter
+            .0
+            .current
+            .insert(map_key, record.clone());
 
         record
     }
@@ -318,10 +417,88 @@ impl sdk_api::SyncInstrument for SyncInstrument {
     }
 }
 
+// TODO
+#[derive(Debug)]
+struct LabeledRecorder {
+    observed_epoch: u64,
+    labels: labels::Set,
+    recorder: Option<Arc<dyn Aggregator + Send + Sync>>,
+}
+
 ///TODO
 #[derive(Debug, Clone)]
 pub struct AsyncInstrument {
     instrument: Arc<Instrument>,
+    /// FIXME: this may not require Mutex if it is not accessed by multiple threads
+    recorders: Arc<Mutex<Option<HashMap<u64, LabeledRecorder>>>>,
+}
+
+impl AsyncInstrument {
+    fn observe(&self, number: &Number, labels: &labels::Set) {
+        if let Err(_err) = aggregator::range_test(number, &self.instrument.descriptor) {
+            todo!()
+            // global::handle(err);
+            // return;
+        }
+        if let Some(recorder) = self.get_recorder(labels) {
+            if let Err(_err) = recorder.update(number, &self.instrument.descriptor) {
+                todo!()
+                // global.handle(err)
+                // return
+            }
+        }
+    }
+
+    fn get_recorder(&self, labels: &labels::Set) -> Option<Arc<dyn Aggregator + Send + Sync>> {
+        self.recorders.try_lock().map_or(None, |mut recorders| {
+            let mut hasher = DefaultHasher::new();
+            labels.equivalent().hash(&mut hasher);
+            let label_hash = hasher.finish();
+            if let Some(recorder) = recorders.as_mut().and_then(|rec| rec.get_mut(&label_hash)) {
+                let current_epoch = self.instrument.meter.0.current_epoch.to_u64();
+                if recorder.observed_epoch == current_epoch {
+                    // last value wins for Observers, so if we see the same labels
+                    // in the current epoch, we replace the old recorder
+                    recorder.recorder = self
+                        .instrument
+                        .meter
+                        .0
+                        .integrator
+                        .aggregation_selector()
+                        .aggregator_for(&self.instrument.descriptor)
+                } else {
+                    recorder.observed_epoch = current_epoch;
+                }
+                // self.recorders.insert(labels.equivalent().hash_value(), recorder);
+                // Does this need clone?
+                return recorder.recorder.clone();
+            }
+
+            let recorder = self
+                .instrument
+                .meter
+                .0
+                .integrator
+                .aggregation_selector()
+                .aggregator_for(&self.instrument.descriptor);
+            if recorders.is_none() {
+                *recorders = Some(HashMap::new());
+            }
+            // This may store nil recorder in the map, thus disabling the
+            // asyncInstrument for the labelset for good. This is intentional,
+            // but will be revisited later.
+            recorders.as_mut().unwrap().insert(
+                label_hash,
+                LabeledRecorder {
+                    recorder: recorder.clone(),
+                    labels: labels::Set::with_equivalent(labels.equivalent().clone()),
+                    observed_epoch: self.instrument.meter.0.current_epoch.to_u64(),
+                },
+            );
+
+            recorder
+        })
+    }
 }
 
 impl sdk_api::Instrument for AsyncInstrument {
@@ -330,7 +507,11 @@ impl sdk_api::Instrument for AsyncInstrument {
     }
 }
 
-impl sdk_api::AsyncInstrument for AsyncInstrument {}
+impl sdk_api::AsyncInstrument for AsyncInstrument {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 /// record maintains the state of one metric instrument.  Due
 /// the use of lock-free algorithms, there may be more than one
@@ -387,7 +568,7 @@ impl sdk_api::BoundSyncInstrument for Record {
                 return;
             }
             if let Err(err) =
-                recorder.update_with_context(cx, number, &self.instrument.instrument.descriptor)
+                recorder.update_with_context(cx, &number, &self.instrument.instrument.descriptor)
             {
                 if let Some(error_handler) = &self.instrument.instrument.meter.0.error_handler {
                     error_handler.call(err);
@@ -396,7 +577,11 @@ impl sdk_api::BoundSyncInstrument for Record {
             }
             // Record was modified, inform the Collect() that things need
             // to be collected while the record is still mapped.
-            self.update_count.add(&NumberKind::U64, 1u64.into());
+            println!(
+                "BUMPING UPDATED COUNT FOR: {:?}",
+                &self.instrument.instrument.descriptor,
+            );
+            self.update_count.add(&NumberKind::U64, &1u64.into());
         }
     }
 
@@ -449,13 +634,14 @@ impl sdk_api::MeterCore for Accumulator {
     fn new_async_instrument(
         &self,
         descriptor: Descriptor,
-        runner: Runner,
+        runner: AsyncRunner,
     ) -> Result<Arc<dyn sdk_api::AsyncInstrument>> {
         let instrument = Arc::new(AsyncInstrument {
             instrument: Arc::new(Instrument {
                 descriptor,
                 meter: self.clone(),
             }),
+            recorders: Arc::new(Mutex::new(None)),
         });
 
         self.0.register(instrument.clone(), runner);
@@ -463,6 +649,8 @@ impl sdk_api::MeterCore for Accumulator {
         Ok(instrument)
     }
 }
+
+impl Accumulator {}
 
 // //!
 // //! The metrics SDK supports producing diagnostic measurements
