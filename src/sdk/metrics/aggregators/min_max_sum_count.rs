@@ -2,7 +2,10 @@ use crate::api::{
     metrics::{Descriptor, MetricsError, Number, NumberKind, Result},
     Context,
 };
-use crate::sdk::export::metrics::Aggregator;
+use crate::sdk::{
+    export::metrics::Aggregator,
+    metrics::aggregators::{Count, Max, Min, MinMaxSumCount, Sum},
+};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::mem;
@@ -33,29 +36,8 @@ pub struct MinMaxSumCountAggregator {
     kind: NumberKind,
 }
 
-impl MinMaxSumCountAggregator {
-    /// TODO
-    pub fn count(&self) -> Result<u64> {
-        self.inner.lock().map_err(From::from).map(|inner| {
-            inner
-                .checkpoint
-                .as_ref()
-                .map_or(0, |state| state.count.to_u64())
-        })
-    }
-
-    /// TODO
-    pub fn max(&self) -> Result<Number> {
-        self.inner.lock().map_err(From::from).map(|inner| {
-            inner
-                .checkpoint
-                .as_ref()
-                .map_or(0u64.into(), |state| state.max.clone())
-        })
-    }
-
-    /// TODO
-    pub fn min(&self) -> Result<Number> {
+impl Min for MinMaxSumCountAggregator {
+    fn min(&self) -> Result<Number> {
         self.inner.lock().map_err(From::from).map(|inner| {
             inner
                 .checkpoint
@@ -64,6 +46,41 @@ impl MinMaxSumCountAggregator {
         })
     }
 }
+
+impl Max for MinMaxSumCountAggregator {
+    fn max(&self) -> Result<Number> {
+        self.inner.lock().map_err(From::from).map(|inner| {
+            inner
+                .checkpoint
+                .as_ref()
+                .map_or(0u64.into(), |state| state.max.clone())
+        })
+    }
+}
+
+impl Sum for MinMaxSumCountAggregator {
+    fn sum(&self) -> Result<Number> {
+        self.inner.lock().map_err(From::from).map(|inner| {
+            inner
+                .checkpoint
+                .as_ref()
+                .map_or(0u64.into(), |state| state.sum.clone())
+        })
+    }
+}
+
+impl Count for MinMaxSumCountAggregator {
+    fn count(&self) -> Result<u64> {
+        self.inner.lock().map_err(From::from).map(|inner| {
+            inner
+                .checkpoint
+                .as_ref()
+                .map_or(0u64, |state| state.count.to_u64())
+        })
+    }
+}
+
+impl MinMaxSumCount for MinMaxSumCountAggregator {}
 
 impl Aggregator for MinMaxSumCountAggregator {
     fn update_with_context(
@@ -91,7 +108,7 @@ impl Aggregator for MinMaxSumCountAggregator {
     }
 
     fn checkpoint(&self, _descriptor: &Descriptor) {
-        let _ = self.inner.lock().map(|mut inner| {
+        let _lock = self.inner.lock().map(|mut inner| {
             inner.checkpoint = Some(mem::replace(&mut inner.current, State::empty(&self.kind)))
         });
     }

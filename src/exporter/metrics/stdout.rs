@@ -8,7 +8,10 @@ use crate::global;
 use crate::sdk::{
     export::metrics::{CheckpointSet, Exporter},
     metrics::{
-        aggregators::{DistributionAggregator, MinMaxSumCountAggregator, SumAggregator},
+        aggregators::{
+            ArrayAggregator, Count, DistributionAggregator, Max, Min, MinMaxSumCountAggregator,
+            Quantile, Sum, SumAggregator,
+        },
         controllers::{self, PushController, PushControllerWorker},
         selectors::simple,
         ErrorHandler,
@@ -27,7 +30,7 @@ where
     I: Fn(Duration) -> IS,
     IS: Stream<Item = ISI> + Send + 'static,
 {
-    StdoutExporterBuilder::<io::Stdout, S, I>::new(spawn, interval)
+    StdoutExporterBuilder::<io::Stdout, S, I>::builder(spawn, interval)
 }
 
 /// TODO
@@ -55,15 +58,15 @@ struct ExpoLine {
     count: u64,
     last_value: (),
 
-    quantiles: Vec<f64>,
+    quantiles: Option<Vec<ExporterQuantile>>,
 
     timestamp: Option<SystemTime>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct ExporterQuantile {
     q: f64,
-    v: f64,
+    v: Box<dyn fmt::Debug>,
 }
 
 impl<W> Exporter for StdoutExporter<W>
@@ -84,19 +87,38 @@ where
 
             let mut expose = ExpoLine::default();
 
-            if let Some(_sum) = agg.as_any().downcast_ref::<SumAggregator>() {
-                todo!("SUM")
-                // expose.sum = sum.sum()?;
+            if let Some(sum) = agg.as_any().downcast_ref::<SumAggregator>() {
+                expose.sum = Some(sum.sum()?.to_debug(kind));
+            }
+
+            if let Some(array) = agg.as_any().downcast_ref::<ArrayAggregator>() {
+                expose.min = Some(array.min()?.to_debug(kind));
+                expose.max = Some(array.max()?.to_debug(kind));
+                expose.sum = Some(array.sum()?.to_debug(kind));
+                expose.count = array.count()?;
+
+                let quantiles = self
+                    .quantiles
+                    .iter()
+                    .map(|&q| {
+                        Ok(ExporterQuantile {
+                            q,
+                            v: array.quantile(q)?.to_debug(kind),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                expose.quantiles = Some(quantiles);
             }
 
             if let Some(mmsc) = agg.as_any().downcast_ref::<MinMaxSumCountAggregator>() {
-                expose.count = mmsc.count()?;
-                expose.max = Some(mmsc.max()?.to_debug(kind));
                 expose.min = Some(mmsc.min()?.to_debug(kind));
+                expose.max = Some(mmsc.max()?.to_debug(kind));
+                expose.sum = Some(mmsc.sum()?.to_debug(kind));
+                expose.count = mmsc.count()?;
 
                 if let Some(_dist) = agg.as_any().downcast_ref::<DistributionAggregator>() {
                     if !self.quantiles.is_empty() {
-                        todo!()
+                        todo!("NOT YET");
                         // summary := make([]expoQuantile, len(e.config.Quantiles))
                         // expose.Quantiles = summary
                         //
@@ -115,7 +137,6 @@ where
                     }
                 }
             } else {
-                todo!()
                 // } else if lv, ok := agg.(aggregator.LastValue); ok {
                 // 	value, timestamp, err := lv.LastValue()
                 // 	if err != nil {
@@ -192,7 +213,7 @@ where
     I: Fn(Duration) -> IS,
     IS: Stream<Item = ISI> + Send + 'static,
 {
-    fn new(spawn: S, interval: I) -> StdoutExporterBuilder<io::Stdout, S, I> {
+    fn builder(spawn: S, interval: I) -> StdoutExporterBuilder<io::Stdout, S, I> {
         StdoutExporterBuilder {
             spawn,
             interval,
@@ -311,7 +332,7 @@ where
                 writer: self.writer,
                 pretty_print: self.pretty_print,
                 do_not_print_time: self.do_not_print_time,
-                quantiles: self.quantiles.unwrap_or(vec![0.5, 0.9, 0.99]),
+                quantiles: self.quantiles.unwrap_or_else(|| vec![0.5, 0.9, 0.99]),
                 label_encoder: self.label_encoder.unwrap_or_else(labels::default_encoder),
             },
         ))

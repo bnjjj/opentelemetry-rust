@@ -15,7 +15,6 @@ use std::time;
 
 lazy_static::lazy_static! {
     static ref DEFAULT_PUSH_PERIOD: time::Duration = time::Duration::from_secs(10);
-    static ref DEFAULT_ERROR_PERIOD: time::Duration = time::Duration::from_secs(10);
 }
 
 /// TODO
@@ -175,8 +174,8 @@ where
         let provider = registry::meter_provider(Arc::new(accumulator.clone()));
 
         let (message_sender, message_receiver) = mpsc::channel(256);
-        let ticker = (self.interval)(self.period.unwrap_or(DEFAULT_PUSH_PERIOD.clone()))
-            .map(|_| PushMessage::Tick);
+        let ticker =
+            (self.interval)(self.period.unwrap_or(*DEFAULT_PUSH_PERIOD)).map(|_| PushMessage::Tick);
 
         (self.spawn)(PushControllerWorker {
             messages: Box::pin(futures::stream::select(message_receiver, ticker)),
@@ -185,7 +184,7 @@ where
             exporter: self.exporter,
             error_handler: self.error_handler,
             // ch:           make(chan struct{}),
-            _timeout: self.timeout.unwrap_or(DEFAULT_PUSH_PERIOD.clone()),
+            _timeout: self.timeout.unwrap_or(*DEFAULT_PUSH_PERIOD),
             // clock:        controllerTime.RealClock{},
         });
 

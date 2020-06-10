@@ -56,6 +56,9 @@ pub enum MetricsError {
     /// TODO
     #[error("io error: {0}")]
     IO(#[from] io::Error),
+    /// TODO
+    #[error("no data collected by this aggregator")]
+    NoDataCollected,
 }
 
 impl<T> From<TryLockError<T>> for MetricsError {

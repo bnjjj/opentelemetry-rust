@@ -19,11 +19,20 @@ pub enum Selector {
 
 impl AggregationSelector for Selector {
     fn aggregator_for(&self, descriptor: &Descriptor) -> Option<Arc<dyn Aggregator + Send + Sync>> {
-        match descriptor.instrument_kind() {
-            InstrumentKind::ValueObserver | InstrumentKind::ValueRecorder => {
-                Some(aggregators::min_max_sum_count(descriptor))
-            }
-            _ => Some(aggregators::sum()),
+        match self {
+            Selector::Inexpensive => match descriptor.instrument_kind() {
+                InstrumentKind::ValueObserver | InstrumentKind::ValueRecorder => {
+                    Some(aggregators::min_max_sum_count(descriptor))
+                }
+                _ => Some(aggregators::sum()),
+            },
+            Selector::Exact => match descriptor.instrument_kind() {
+                InstrumentKind::ValueObserver | InstrumentKind::ValueRecorder => {
+                    Some(Arc::new(aggregators::array()))
+                }
+                _ => Some(aggregators::sum()),
+            },
+            _ => todo!(),
         }
     }
 }

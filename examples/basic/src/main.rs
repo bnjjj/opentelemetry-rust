@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracer()?;
     let _started = init_meter()?;
 
+    let tracer = global::tracer("ex.com/basic");
     let meter = global::meter("ex.com/basic");
 
     let one_metric_callback = |res: F64ObserverResult| res.observe(1.0, COMMON_LABELS.as_ref());
@@ -74,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let value_recorder = value_recorder_two.bind(COMMON_LABELS.as_ref());
 
-    global::tracer("component-main").in_span("operation", move |cx| {
+    tracer.in_span("operation", |cx| {
         let span = cx.span();
         span.add_event(
             "Nice operation!".to_string(),
@@ -89,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             vec![value_recorder_two.measurement(2.0)],
         );
 
-        global::tracer("component-bar").in_span("Sub operation...", move |cx| {
+        tracer.in_span("Sub operation...", |cx| {
             let span = cx.span();
             span.set_attribute(LEMONS_KEY.string("five"));
 
@@ -99,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    // Let the metrics push to stdout
     tokio::time::delay_for(Duration::from_millis(25)).await;
 
     Ok(())

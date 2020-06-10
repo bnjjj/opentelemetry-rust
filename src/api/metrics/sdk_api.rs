@@ -52,12 +52,12 @@ pub trait SyncInstrument: fmt::Debug {
 /// TODO
 pub trait BoundSyncInstrument: fmt::Debug {
     /// TODO
-    fn record_one<'a>(&self, number: Number) {
+    fn record_one(&self, number: Number) {
         self.record_one_with_context(&Context::current(), number)
     }
 
     /// TODO
-    fn record_one_with_context<'a>(&self, cx: &Context, number: Number);
+    fn record_one_with_context(&self, cx: &Context, number: Number);
 }
 
 /// TODO

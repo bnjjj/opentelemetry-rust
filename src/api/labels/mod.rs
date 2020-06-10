@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 const MAX_CONCURRENT_ENCODERS: usize = 3;
+type CachedEncoders = [Option<(EncoderId, String)>; MAX_CONCURRENT_ENCODERS];
 
 mod encoder;
 pub use encoder::{default_encoder, new_encoder_id, DefaultLabelEncoder, Encoder, EncoderId};
@@ -22,7 +23,7 @@ pub use encoder::{default_encoder, new_encoder_id, DefaultLabelEncoder, Encoder,
 #[derive(Clone, Debug, Default)]
 pub struct Set {
     equivalent: Distinct,
-    cached_encodings: Arc<Mutex<[Option<(EncoderId, String)>; MAX_CONCURRENT_ENCODERS]>>,
+    cached_encodings: Arc<Mutex<CachedEncoders>>,
 }
 
 impl From<&[KeyValue]> for Set {
@@ -102,7 +103,7 @@ impl Set {
 
                 // TODO: This is a performance cliff.  Find a way for this to
                 // generate a warning.
-                return r;
+                r
             })
     }
 }
@@ -129,33 +130,8 @@ impl<'a> Iterator for Iter<'a> {
 /// Distinct wraps a variable-size array of `kv.KeyValue`, constructed with keys
 /// in sorted order. This can be used as a map key or for equality checking
 /// between Sets.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Distinct(Vec<KeyValue>);
-
-impl cmp::Ord for Distinct {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-impl cmp::PartialOrd for Distinct {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        for idx in 0..self.0.len() {
-            match (self.0.get(idx).as_ref(), other.0.get(idx).as_ref()) {
-                (Some(_), None) => return Some(cmp::Ordering::Greater),
-                (Some(kv), Some(other_kv)) => return Some(kv.key.cmp(&other_kv.key)),
-                _ => unreachable!(),
-            }
-        }
-
-        if other.0.len() > self.0.len() {
-            // Equal elements, but other has more
-            Some(cmp::Ordering::Less)
-        } else {
-            // ALl equal elements
-            Some(cmp::Ordering::Equal)
-        }
-    }
-}
 
 impl Distinct {
     /// TODO
@@ -174,6 +150,21 @@ impl From<&[KeyValue]> for Distinct {
 }
 
 impl Eq for Distinct {}
+impl cmp::PartialEq for Distinct {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+
+        for idx in 0..self.0.len() {
+            if self.0.get(idx) != other.0.get(idx) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
 impl Hash for Distinct {
     fn hash<H: Hasher>(&self, state: &mut H) {
         for kv in self.0.iter() {

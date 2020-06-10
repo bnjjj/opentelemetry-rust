@@ -2,7 +2,7 @@ use crate::api::{
     metrics::{Descriptor, Number, Result},
     Context,
 };
-use crate::sdk::export::metrics::Aggregator;
+use crate::sdk::{export::metrics::Aggregator, metrics::aggregators::Sum};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -18,6 +18,12 @@ pub struct SumAggregator {
     checkpoint: Number,
 }
 
+impl Sum for SumAggregator {
+    fn sum(&self) -> Result<Number> {
+        Ok(self.checkpoint.clone())
+    }
+}
+
 impl Aggregator for SumAggregator {
     fn update_with_context(
         &self,
@@ -28,15 +34,22 @@ impl Aggregator for SumAggregator {
         self.current.add(descriptor.number_kind(), number);
         Ok(())
     }
-    fn checkpoint(&self, _descriptor: &Descriptor) {
-        todo!()
+    fn checkpoint(&self, descriptor: &Descriptor) {
+        let kind = descriptor.number_kind();
+        self.checkpoint.assign(kind, &self.current);
+        self.current.assign(kind, &kind.zero());
     }
     fn merge(
         &self,
-        _other: &Arc<dyn Aggregator + Send + Sync>,
-        _descriptor: &Descriptor,
+        other: &Arc<dyn Aggregator + Send + Sync>,
+        descriptor: &Descriptor,
     ) -> Result<()> {
-        todo!()
+        if let Some(other_sum) = other.as_any().downcast_ref::<SumAggregator>() {
+            self.checkpoint
+                .add(descriptor.number_kind(), &other_sum.checkpoint)
+        }
+
+        Ok(())
     }
     fn as_any(&self) -> &dyn Any {
         self

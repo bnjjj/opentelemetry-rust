@@ -10,11 +10,6 @@ pub struct Number(AtomicU64);
 
 impl Number {
     /// TODO
-    pub fn clone(&self) -> Self {
-        self.0.load(Ordering::SeqCst).into()
-    }
-
-    /// TODO
     pub fn assign(&self, number_kind: &NumberKind, other: &Number) {
         let current = self.0.load(Ordering::Acquire);
         let other = other.0.load(Ordering::Acquire);
@@ -70,6 +65,11 @@ impl Number {
     }
 
     /// TODO
+    pub fn to_f64(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::SeqCst))
+    }
+
+    /// TODO
     pub fn partial_cmp(&self, number_kind: &NumberKind, other: &Number) -> Option<cmp::Ordering> {
         let current = self.0.load(Ordering::SeqCst);
         let other = other.0.load(Ordering::SeqCst);
@@ -107,6 +107,12 @@ impl Number {
             NumberKind::U64 => Box::new(current),
             NumberKind::F64 => Box::new(f64::from_bits(current)),
         }
+    }
+}
+
+impl Clone for Number {
+    fn clone(&self) -> Self {
+        self.0.load(Ordering::SeqCst).into()
     }
 }
 
