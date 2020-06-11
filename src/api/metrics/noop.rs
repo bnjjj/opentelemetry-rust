@@ -76,7 +76,7 @@ pub struct NoopBoundSyncInstrument;
 
 impl BoundSyncInstrument for NoopBoundSyncInstrument {
     fn record_one_with_context<'a>(&self, _cx: &Context, _number: Number) {
-        todo!()
+        // Ignored
     }
 }
 

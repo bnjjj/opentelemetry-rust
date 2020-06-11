@@ -154,8 +154,8 @@ impl Points {
         match kind {
             NumberKind::F64 => self.0.sort_by(|a, b| {
                 // FIXME better handling of f64 nan values
-                a.to_f64()
-                    .partial_cmp(&b.to_f64())
+                a.to_f64(kind)
+                    .partial_cmp(&b.to_f64(kind))
                     .unwrap_or(cmp::Ordering::Less)
             }),
             NumberKind::U64 => self.0.sort_by(|a, b| a.to_u64().cmp(&b.to_u64())),

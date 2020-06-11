@@ -12,9 +12,7 @@ pub enum Selector {
     /// TODO
     Exact,
     /// TODO
-    Sketch,
-    /// TODO
-    Histogram,
+    Histogram(Vec<f64>),
 }
 
 impl AggregationSelector for Selector {
@@ -22,17 +20,22 @@ impl AggregationSelector for Selector {
         match self {
             Selector::Inexpensive => match descriptor.instrument_kind() {
                 InstrumentKind::ValueObserver | InstrumentKind::ValueRecorder => {
-                    Some(aggregators::min_max_sum_count(descriptor))
+                    Some(Arc::new(aggregators::min_max_sum_count(descriptor)))
                 }
-                _ => Some(aggregators::sum()),
+                _ => Some(Arc::new(aggregators::sum())),
             },
             Selector::Exact => match descriptor.instrument_kind() {
                 InstrumentKind::ValueObserver | InstrumentKind::ValueRecorder => {
                     Some(Arc::new(aggregators::array()))
                 }
-                _ => Some(aggregators::sum()),
+                _ => Some(Arc::new(aggregators::sum())),
             },
-            _ => todo!(),
+            Selector::Histogram(boundaries) => match descriptor.instrument_kind() {
+                InstrumentKind::ValueObserver | InstrumentKind::ValueRecorder => {
+                    Some(Arc::new(aggregators::histogram(descriptor, &boundaries)))
+                }
+                _ => Some(Arc::new(aggregators::sum())),
+            },
         }
     }
 }

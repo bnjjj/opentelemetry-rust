@@ -65,8 +65,13 @@ impl Number {
     }
 
     /// TODO
-    pub fn to_f64(&self) -> f64 {
-        f64::from_bits(self.0.load(Ordering::SeqCst))
+    pub fn to_f64(&self, number_kind: &NumberKind) -> f64 {
+        let current = self.0.load(Ordering::SeqCst);
+
+        match number_kind {
+            NumberKind::U64 => current as f64,
+            NumberKind::F64 => f64::from_bits(current),
+        }
     }
 
     /// TODO

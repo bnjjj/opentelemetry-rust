@@ -1,9 +1,8 @@
-use opentelemetry::api::metrics::{self, F64ObserverResult};
+use opentelemetry::api::metrics::{self, F64ObserverResult, MetricsError};
 use opentelemetry::api::{Context, CorrelationContextExt, Key, KeyValue, TraceContextExt, Tracer};
 use opentelemetry::exporter;
 use opentelemetry::sdk::metrics::PushController;
 use opentelemetry::{global, sdk};
-use std::time::Duration;
 
 fn init_tracer() -> thrift::Result<()> {
     let exporter = opentelemetry_jaeger::Exporter::builder()
@@ -35,7 +34,11 @@ fn init_meter() -> metrics::Result<PushController> {
     exporter::metrics::stdout(tokio::spawn, tokio::time::interval)
         .with_quantiles(vec![0.5, 0.9, 0.99])
         .with_pretty_print(false)
-        .with_period(Duration::from_millis(20))
+        .with_formatter(|batch| {
+            serde_json::to_value(batch)
+                .map(|value| value.to_string())
+                .map_err(|err| MetricsError::Other(err.to_string()))
+        })
         .with_error_handler(|err| eprintln!("~~~~~~~~ERROR: {:?}~~~~~~~~~", err))
         .try_init()
 }
@@ -99,9 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             value_recorder.record(1.3);
         });
     });
-
-    // Let the metrics push to stdout
-    tokio::time::delay_for(Duration::from_millis(25)).await;
 
     Ok(())
 }

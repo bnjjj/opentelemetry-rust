@@ -12,15 +12,15 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 
 /// TODO
-pub fn min_max_sum_count(descriptor: &Descriptor) -> Arc<dyn Aggregator + Send + Sync> {
+pub fn min_max_sum_count(descriptor: &Descriptor) -> MinMaxSumCountAggregator {
     let kind = descriptor.number_kind().clone();
-    Arc::new(MinMaxSumCountAggregator {
+    MinMaxSumCountAggregator {
         inner: Mutex::new(Inner {
             current: State::empty(&kind),
             checkpoint: None,
         }),
         kind,
-    })
+    }
 }
 
 #[derive(Debug)]

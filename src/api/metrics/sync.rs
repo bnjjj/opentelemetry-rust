@@ -47,8 +47,11 @@ impl F64ObserverResult {
 }
 
 impl fmt::Debug for F64ObserverResult {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("F64ObserverResult")
+            .field("instrument", &self.instrument)
+            .field("f", &"fn(&[KeyValue], &[Observation])")
+            .finish()
     }
 }
 

@@ -7,8 +7,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// TODO
-pub fn sum() -> Arc<dyn Aggregator + Send + Sync> {
-    Arc::new(SumAggregator::default())
+pub fn sum() -> SumAggregator {
+    SumAggregator::default()
 }
 
 /// TODO

@@ -3,12 +3,14 @@ use crate::api::metrics::{Number, Result};
 use std::time::SystemTime;
 
 mod array;
-mod distribution;
+mod histogram;
+mod last_value;
 mod min_max_sum_count;
 mod sum;
 
 pub use array::{array, ArrayAggregator};
-pub use distribution::DistributionAggregator;
+pub use histogram::{histogram, HistogramAggregator};
+pub use last_value::{last_value, LastValueAggregator};
 pub use min_max_sum_count::{min_max_sum_count, MinMaxSumCountAggregator};
 pub use sum::{sum, SumAggregator};
 

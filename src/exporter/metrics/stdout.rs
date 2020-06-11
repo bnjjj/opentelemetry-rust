@@ -9,8 +9,8 @@ use crate::sdk::{
     export::metrics::{CheckpointSet, Exporter},
     metrics::{
         aggregators::{
-            ArrayAggregator, Count, DistributionAggregator, Max, Min, MinMaxSumCountAggregator,
-            Quantile, Sum, SumAggregator,
+            ArrayAggregator, Count, HistogramAggregator, LastValue, LastValueAggregator, Max, Min,
+            MinMaxSumCountAggregator, Quantile, Sum, SumAggregator,
         },
         controllers::{self, PushController, PushControllerWorker},
         selectors::simple,
@@ -18,6 +18,8 @@ use crate::sdk::{
     },
 };
 use futures::Stream;
+#[cfg(feature = "serialize")]
+use serde::{Serialize, Serializer};
 use std::fmt;
 use std::io;
 use std::sync::Mutex;
@@ -41,32 +43,65 @@ pub struct StdoutExporter<W> {
     do_not_print_time: bool,
     quantiles: Vec<f64>,
     label_encoder: Box<dyn labels::Encoder + Send + Sync>,
+    formatter: Option<Formatter>,
 }
 
+/// TODO
+#[cfg_attr(feature = "serialize", derive(Serialize))]
 #[derive(Default, Debug)]
-struct ExpoBatch {
+pub struct ExporterBatch {
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     timestamp: Option<SystemTime>,
     updates: Vec<ExpoLine>,
 }
 
+#[cfg_attr(feature = "serialize", derive(Serialize))]
 #[derive(Default, Debug)]
 struct ExpoLine {
     name: String,
-    min: Option<Box<dyn fmt::Debug>>,
-    max: Option<Box<dyn fmt::Debug>>,
-    sum: Option<Box<dyn fmt::Debug>>,
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+    min: Option<ExportNumeric>,
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+    max: Option<ExportNumeric>,
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+    sum: Option<ExportNumeric>,
     count: u64,
-    last_value: (),
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+    last_value: Option<ExportNumeric>,
 
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     quantiles: Option<Vec<ExporterQuantile>>,
 
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     timestamp: Option<SystemTime>,
 }
 
+/// TODO
+pub struct ExportNumeric(Box<dyn fmt::Debug>);
+
+impl fmt::Debug for ExportNumeric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[cfg(feature = "serialize")]
+impl Serialize for ExportNumeric {
+    #[cfg(feature = "serialize")]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = format!("{:?}", self);
+        serializer.serialize_str(&s)
+    }
+}
+
+#[cfg_attr(feature = "serialize", derive(Serialize))]
 #[derive(Debug)]
 struct ExporterQuantile {
     q: f64,
-    v: Box<dyn fmt::Debug>,
+    v: ExportNumeric,
 }
 
 impl<W> Exporter for StdoutExporter<W>
@@ -74,11 +109,10 @@ where
     W: fmt::Debug + io::Write,
 {
     fn export(&self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()> {
-        let mut batch = ExpoBatch::default();
+        let mut batch = ExporterBatch::default();
         if !self.do_not_print_time {
             batch.timestamp = Some(SystemTime::now());
         }
-        // checkpoint_set.try_for_each(process_record)?;
         checkpoint_set.try_for_each(&mut |record| {
             let desc = record.descriptor();
             let agg = record.aggregator();
@@ -87,14 +121,10 @@ where
 
             let mut expose = ExpoLine::default();
 
-            if let Some(sum) = agg.as_any().downcast_ref::<SumAggregator>() {
-                expose.sum = Some(sum.sum()?.to_debug(kind));
-            }
-
             if let Some(array) = agg.as_any().downcast_ref::<ArrayAggregator>() {
-                expose.min = Some(array.min()?.to_debug(kind));
-                expose.max = Some(array.max()?.to_debug(kind));
-                expose.sum = Some(array.sum()?.to_debug(kind));
+                expose.min = Some(ExportNumeric(array.min()?.to_debug(kind)));
+                expose.max = Some(ExportNumeric(array.max()?.to_debug(kind)));
+                expose.sum = Some(ExportNumeric(array.sum()?.to_debug(kind)));
                 expose.count = array.count()?;
 
                 let quantiles = self
@@ -103,51 +133,38 @@ where
                     .map(|&q| {
                         Ok(ExporterQuantile {
                             q,
-                            v: array.quantile(q)?.to_debug(kind),
+                            v: ExportNumeric(array.quantile(q)?.to_debug(kind)),
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
                 expose.quantiles = Some(quantiles);
             }
 
-            if let Some(mmsc) = agg.as_any().downcast_ref::<MinMaxSumCountAggregator>() {
-                expose.min = Some(mmsc.min()?.to_debug(kind));
-                expose.max = Some(mmsc.max()?.to_debug(kind));
-                expose.sum = Some(mmsc.sum()?.to_debug(kind));
-                expose.count = mmsc.count()?;
+            if let Some(last_value) = agg.as_any().downcast_ref::<LastValueAggregator>() {
+                let (value, timestamp) = last_value.last_value()?;
+                expose.last_value = Some(ExportNumeric(value.to_debug(kind)));
 
-                if let Some(_dist) = agg.as_any().downcast_ref::<DistributionAggregator>() {
-                    if !self.quantiles.is_empty() {
-                        todo!("NOT YET");
-                        // summary := make([]expoQuantile, len(e.config.Quantiles))
-                        // expose.Quantiles = summary
-                        //
-                        // for i, q := range e.config.Quantiles {
-                        //         var vstr interface{}
-                        //         value, err := dist.Quantile(q)
-                        //         if err != nil {
-                        //                 return err
-                        //         }
-                        //         vstr = value.AsInterface(kind)
-                        //         summary[i] = expoQuantile{
-                        //                 Q: q,
-                        //                 V: vstr,
-                        //         }
-                        // }
-                    }
+                if !self.do_not_print_time {
+                    expose.timestamp = Some(timestamp);
                 }
-            } else {
-                // } else if lv, ok := agg.(aggregator.LastValue); ok {
-                // 	value, timestamp, err := lv.LastValue()
-                // 	if err != nil {
-                // 		return err
-                // 	}
-                // 	expose.LastValue = value.AsInterface(kind)
-                //
-                // 	if !e.config.DoNotPrintTime {
-                // 		expose.Timestamp = &timestamp
-                // 	}
-            };
+            }
+
+            if let Some(histogram) = agg.as_any().downcast_ref::<HistogramAggregator>() {
+                expose.sum = Some(ExportNumeric(histogram.sum()?.to_debug(kind)));
+                expose.count = histogram.count()?;
+                // TODO expose buckets
+            }
+
+            if let Some(mmsc) = agg.as_any().downcast_ref::<MinMaxSumCountAggregator>() {
+                expose.min = Some(ExportNumeric(mmsc.min()?.to_debug(kind)));
+                expose.max = Some(ExportNumeric(mmsc.max()?.to_debug(kind)));
+                expose.sum = Some(ExportNumeric(mmsc.sum()?.to_debug(kind)));
+                expose.count = mmsc.count()?;
+            }
+
+            if let Some(sum) = agg.as_any().downcast_ref::<SumAggregator>() {
+                expose.sum = Some(ExportNumeric(sum.sum()?.to_debug(kind)));
+            }
 
             let mut encoded_labels = String::new();
             let iter = record.labels().iter();
@@ -176,8 +193,11 @@ where
         })?;
 
         self.writer.lock().map_err(From::from).and_then(|mut w| {
-            w.write_all(format!("{:?}\n", batch).as_bytes())
-                .map_err(From::from)
+            let formatted = match &self.formatter {
+                Some(formatter) => formatter.0(batch)?.to_string(),
+                None => format!("{:?}\n", batch),
+            };
+            w.write_all(formatted.as_bytes()).map_err(From::from)
         })
         // let data = serde_json::to_value(batch)?;
         // if self.pretty_print {
@@ -193,6 +213,14 @@ where
 }
 
 /// TODO
+pub struct Formatter(Box<dyn Fn(ExporterBatch) -> Result<String> + Send + Sync>);
+impl fmt::Debug for Formatter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Formatter(closure)")
+    }
+}
+
+/// TODO
 #[derive(Debug)]
 pub struct StdoutExporterBuilder<W, S, I> {
     spawn: S,
@@ -204,6 +232,7 @@ pub struct StdoutExporterBuilder<W, S, I> {
     label_encoder: Option<Box<dyn labels::Encoder + Send + Sync>>,
     period: Option<Duration>,
     error_handler: Option<ErrorHandler>,
+    formatter: Option<Formatter>,
 }
 
 impl<W, S, SO, I, IS, ISI> StdoutExporterBuilder<W, S, I>
@@ -224,6 +253,7 @@ where
             label_encoder: None,
             period: None,
             error_handler: None,
+            formatter: None,
         }
     }
     /// TODO
@@ -238,6 +268,7 @@ where
             label_encoder: self.label_encoder,
             period: self.period,
             error_handler: self.error_handler,
+            formatter: self.formatter,
         }
     }
 
@@ -296,6 +327,17 @@ where
     }
 
     /// TODO
+    pub fn with_formatter<T>(self, formatter: T) -> Self
+    where
+        T: Fn(ExporterBatch) -> Result<String> + Send + Sync + 'static,
+    {
+        StdoutExporterBuilder {
+            formatter: Some(Formatter(Box::new(formatter))),
+            ..self
+        }
+    }
+
+    /// TODO
     pub fn try_init(mut self) -> metrics::Result<PushController> {
         let period = self.period.take();
         let error_handler = self.error_handler.take();
@@ -334,6 +376,7 @@ where
                 do_not_print_time: self.do_not_print_time,
                 quantiles: self.quantiles.unwrap_or_else(|| vec![0.5, 0.9, 0.99]),
                 label_encoder: self.label_encoder.unwrap_or_else(labels::default_encoder),
+                formatter: self.formatter,
             },
         ))
     }

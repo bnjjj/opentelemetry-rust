@@ -68,7 +68,7 @@ pub trait Aggregator: fmt::Debug {
         &self,
         other: &Arc<dyn Aggregator + Send + Sync>,
         descriptor: &Descriptor,
-    ) -> Result<(), MetricsError>;
+    ) -> metrics::Result<()>;
 
     /// TODO
     fn as_any(&self) -> &dyn Any;

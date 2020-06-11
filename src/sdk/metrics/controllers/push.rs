@@ -67,34 +67,44 @@ pub struct PushControllerWorker {
     _timeout: time::Duration,
 }
 
+impl PushControllerWorker {
+    fn on_tick(&mut self) {
+        // ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+        // defer cancel()
+
+        if let Err(err) = self.integrator.lock().and_then(|mut locked_integrator| {
+            self.accumulator.0.collect(&mut locked_integrator);
+            self.exporter.export(locked_integrator.checkpoint_set())?;
+            locked_integrator.finished_collection();
+            Ok(())
+        }) {
+            if let Some(error_handler) = &self.error_handler {
+                error_handler.call(err);
+            }
+        }
+    }
+}
+
 impl Future for PushControllerWorker {
     type Output = ();
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         loop {
             match futures::ready!(self.messages.poll_next_unpin(cx)) {
                 // Span batch interval time reached, export current spans.
-                Some(PushMessage::Tick) => {
-                    // ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-                    // defer cancel()
-
-                    // TODO see if single lock here can prevent each lock to process
-                    if let Err(err) = self.integrator.lock().and_then(|mut locked_integrator| {
-                        self.accumulator.0.collect(&mut locked_integrator);
-                        self.exporter.export(locked_integrator.checkpoint_set())?;
-                        locked_integrator.finished_collection();
-                        Ok(())
-                    }) {
-                        if let Some(error_handler) = &self.error_handler {
-                            error_handler.call(err);
-                        }
-                    }
-                }
+                Some(PushMessage::Tick) => self.on_tick(),
                 // Stream has terminated or processor is shutdown, return to finish execution.
                 None | Some(PushMessage::Shutdown) => {
                     return task::Poll::Ready(());
                 }
             }
         }
+    }
+}
+
+impl Drop for PushControllerWorker {
+    fn drop(&mut self) {
+        // Try to push data one last time
+        self.on_tick()
     }
 }
 

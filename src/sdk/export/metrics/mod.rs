@@ -86,7 +86,7 @@ pub trait Exporter: fmt::Debug {
 }
 
 /// TODO
-pub trait CheckpointSet {
+pub trait CheckpointSet: fmt::Debug {
     /// TODO
     fn try_for_each(&mut self, f: &mut dyn FnMut(&Record) -> Result<()>) -> Result<()>;
 }
