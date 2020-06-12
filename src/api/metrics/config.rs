@@ -1,6 +1,6 @@
 use crate::api::Unit;
 
-/// TODO
+/// Config contains some options for metrics of any kind.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct Config {
     pub(crate) description: Option<String>,
@@ -9,7 +9,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// TODO
+    /// Create a new config from library name
     pub fn with_library_name(library_name: String) -> Self {
         Config {
             description: None,
@@ -18,17 +18,17 @@ impl Config {
         }
     }
 
-    /// TODO
+    /// Description is an optional field describing the metric instrument.
     pub fn description(&self) -> Option<&String> {
         self.description.as_ref()
     }
 
-    /// TODO
+    /// Unit is an optional field describing the metric instrument data.
     pub fn unit(&self) -> Option<&Unit> {
         self.unit.as_ref()
     }
 
-    /// TODO
+    /// Library name is the name given to the Meter that created this instrument.
     pub fn library_name(&self) -> &String {
         &self.library_name
     }

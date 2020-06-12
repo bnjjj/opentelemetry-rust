@@ -15,23 +15,27 @@
 //! so that the SDK knows where and how to deliver the telemetry.
 pub mod context;
 pub mod core;
+#[cfg(feature = "trace")]
 pub mod correlation;
 pub mod labels;
+#[cfg(feature = "metrics")]
 pub mod metrics;
+#[cfg(feature = "trace")]
 pub mod trace;
 
 pub use self::core::{Key, KeyValue, Unit, Value};
 #[cfg(feature = "base64_format")]
 pub use context::propagation::base64_format::Base64Format;
-pub use context::{
-    propagation::{
-        binary_propagator::BinaryFormat, composite_propagator::HttpTextCompositePropagator,
-        text_propagator::HttpTextFormat, Carrier,
-    },
-    Context,
+#[cfg(feature = "trace")]
+use context::propagation::{
+    binary_propagator::BinaryFormat, composite_propagator::HttpTextCompositePropagator,
+    text_propagator::HttpTextFormat, Carrier,
 };
+pub use context::Context;
+#[cfg(feature = "trace")]
 pub use correlation::{CorrelationContext, CorrelationContextExt, CorrelationContextPropagator};
 
+#[cfg(feature = "trace")]
 pub use trace::{
     b3_propagator::B3Propagator,
     context::TraceContextExt,

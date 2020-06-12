@@ -54,7 +54,10 @@ impl MeterCore for NoopMeterCore {
 pub struct NoopSyncInstrument;
 
 impl SyncInstrument for NoopSyncInstrument {
-    fn bind<'a>(&self, _labels: &'a [crate::api::KeyValue]) -> Arc<dyn BoundSyncInstrument> {
+    fn bind<'a>(
+        &self,
+        _labels: &'a [crate::api::KeyValue],
+    ) -> Arc<dyn BoundSyncInstrument + Send + Sync> {
         Arc::new(NoopBoundSyncInstrument)
     }
     fn record_one_with_context<'a>(

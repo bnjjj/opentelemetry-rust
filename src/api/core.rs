@@ -210,3 +210,10 @@ impl Unit {
         &self.0
     }
 }
+
+impl AsRef<str> for Unit {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}

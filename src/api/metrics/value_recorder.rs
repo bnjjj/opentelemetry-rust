@@ -39,7 +39,7 @@ where
 #[derive(Debug)]
 pub struct BoundValueRecorder<'a, T> {
     labels: &'a [KeyValue],
-    instrument: Arc<dyn sdk_api::BoundSyncInstrument>,
+    instrument: Arc<dyn sdk_api::BoundSyncInstrument + Send + Sync>,
     _marker: marker::PhantomData<T>,
 }
 
@@ -83,7 +83,7 @@ impl<'a, T> ValueRecorderBuilder<'a, T> {
 
     /// TODO
     pub fn with_description<S: Into<String>>(mut self, description: S) -> Self {
-        self.descriptor.config_mut().description = Some(description.into());
+        self.descriptor.set_description(description.into());
         self
     }
 

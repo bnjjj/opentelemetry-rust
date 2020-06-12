@@ -19,11 +19,10 @@ edition = "2018"
 base64 = { version = "0.12", optional = true }
 bincode = { version = "1.2", optional = true }
 flurry = { version = "0.3", optional = true }
-futures = { version = "0.3", optional = true }
+futures = "0.3"
 lazy_static = "1.4"
 percent-encoding = "2.0"
 pin-project = { version = "0.4", optional = true }
-prometheus = { version = "0.7", optional = true }
 rand = { version = "0.7", optional = true }
 serde = { version = "1.0", features = ["derive", "rc"], optional = true }
 http = { version = "0.2", optional = true }
@@ -37,13 +36,14 @@ tokio = { version = "0.2", features = ["full"] }
 [features]
 default = ["metrics", "trace"]
 base64_format = ["base64"]
-trace = ["futures", "rand", "pin-project"]
-metrics = ["prometheus", "thiserror", "flurry"]
+trace = ["rand", "pin-project"]
+metrics = ["thiserror", "flurry"]
 serialize = ["serde", "bincode"]
 
 [workspace]
 members = [
     "opentelemetry-jaeger",
+    "opentelemetry-prometheus",
     "opentelemetry-zipkin",
     "examples/actix-udp",
     "examples/actix-http",

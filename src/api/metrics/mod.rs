@@ -1,6 +1,7 @@
 //! # OpenTelemetry Metrics API
 
 use crate::api::{Context, KeyValue};
+use std::error::Error;
 use std::fmt;
 use std::io;
 use std::marker;
@@ -8,23 +9,26 @@ use std::result;
 use std::sync::{Arc, PoisonError, TryLockError};
 use thiserror::Error;
 
+mod async_instrument;
 mod config;
+mod counter;
 mod descriptor;
 pub mod noop;
 mod number;
 pub mod registry;
 pub mod sdk_api;
-mod sync;
+mod sync_instrument;
 mod value_observer;
 mod value_recorder;
 
+pub use async_instrument::{AsyncRunner, Observation, ObserverResult};
 pub use config::Config;
+pub use counter::{BoundCounter, Counter, CounterBuilder};
 pub use descriptor::Descriptor;
 pub use number::{Number, NumberKind};
-use std::error::Error;
-pub use sync::{AsyncRunner, F64ObserverResult, Measurement, Observation};
+pub use sync_instrument::Measurement;
 pub use value_observer::{ValueObserver, ValueObserverBuilder};
-pub use value_recorder::{ValueRecorder, ValueRecorderBuilder};
+pub use value_recorder::{BoundValueRecorder, ValueRecorder, ValueRecorderBuilder};
 
 /// TODO
 pub type Result<T> = result::Result<T, MetricsError>;
@@ -94,7 +98,7 @@ impl Meter {
     where
         Self: Sized,
         T: Into<String>,
-        F: Fn(F64ObserverResult) + Send + Sync + 'static,
+        F: Fn(ObserverResult<f64>) + Send + Sync + 'static,
     {
         ValueObserverBuilder {
             meter: self,
@@ -128,7 +132,39 @@ impl Meter {
     }
 
     /// TODO
-    pub fn new_sync_instrument(
+    pub fn u64_value_recorder<T>(&self, name: T) -> ValueRecorderBuilder<u64>
+    where
+        Self: Sized,
+        T: Into<String>,
+    {
+        ValueRecorderBuilder {
+            meter: self,
+            descriptor: Descriptor::new(
+                name.into(),
+                self.name.clone(),
+                InstrumentKind::ValueRecorder,
+                NumberKind::U64,
+            ),
+            _marker: marker::PhantomData,
+        }
+    }
+
+    ///TODO
+    pub fn u64_counter<T>(&self, name: T) -> CounterBuilder<u64>
+    where
+        Self: Sized,
+        T: Into<String>,
+    {
+        CounterBuilder::new(
+            self,
+            name.into(),
+            InstrumentKind::ValueRecorder,
+            NumberKind::U64,
+        )
+    }
+
+    /// TODO
+    fn new_sync_instrument(
         &self,
         descriptor: Descriptor,
     ) -> Result<Arc<dyn sdk_api::SyncInstrument>> {
@@ -136,7 +172,7 @@ impl Meter {
     }
 
     /// TODO
-    pub fn new_async_instrument(
+    fn new_async_instrument(
         &self,
         descriptor: Descriptor,
         runner: AsyncRunner,

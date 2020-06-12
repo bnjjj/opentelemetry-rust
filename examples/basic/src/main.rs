@@ -39,7 +39,6 @@ fn init_meter() -> metrics::Result<PushController> {
                 .map(|value| value.to_string())
                 .map_err(|err| MetricsError::Other(err.to_string()))
         })
-        .with_error_handler(|err| eprintln!("~~~~~~~~ERROR: {:?}~~~~~~~~~", err))
         .try_init()
 }
 

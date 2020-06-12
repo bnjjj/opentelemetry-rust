@@ -20,7 +20,7 @@ pub struct ValueObserverBuilder<'a, T> {
 impl<T> ValueObserverBuilder<'_, T> {
     /// TODO
     pub fn with_description<S: Into<String>>(mut self, description: S) -> Self {
-        self.descriptor.config_mut().description = Some(description.into());
+        self.descriptor.set_description(description.into());
         self
     }
 

@@ -35,7 +35,7 @@ pub trait Instrument: fmt::Debug {
 /// TODO
 pub trait SyncInstrument: fmt::Debug {
     /// TODO
-    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Arc<dyn BoundSyncInstrument>;
+    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Arc<dyn BoundSyncInstrument + Send + Sync>;
 
     /// TODO
     fn record_one<'a>(&self, number: Number, labels: &'a [KeyValue]) {
@@ -50,7 +50,7 @@ pub trait SyncInstrument: fmt::Debug {
 }
 
 /// TODO
-pub trait BoundSyncInstrument: fmt::Debug {
+pub trait BoundSyncInstrument: fmt::Debug + Send + Sync {
     /// TODO
     fn record_one(&self, number: Number) {
         self.record_one_with_context(&Context::current(), number)

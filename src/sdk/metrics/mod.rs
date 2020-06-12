@@ -371,7 +371,7 @@ impl AccumulatorCore {
 
 ///TODO
 #[derive(Debug, Clone)]
-pub struct SyncInstrument {
+struct SyncInstrument {
     instrument: Arc<Instrument>,
 }
 
@@ -420,7 +420,7 @@ impl sdk_api::SyncInstrument for SyncInstrument {
     fn bind<'a>(
         &self,
         labels: &'a [crate::api::KeyValue],
-    ) -> Arc<dyn sdk_api::BoundSyncInstrument> {
+    ) -> Arc<dyn sdk_api::BoundSyncInstrument + Send + Sync> {
         self.acquire_handle(labels)
     }
     fn record_one_with_context<'a>(
