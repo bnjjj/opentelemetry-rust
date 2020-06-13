@@ -17,6 +17,11 @@ pub struct Observation {
 }
 
 impl Observation {
+    /// Create a new observation for an instrument
+    pub(crate) fn new(number: Number, instrument: Arc<dyn sdk_api::AsyncInstrument>) -> Self {
+        Observation { number, instrument }
+    }
+
     /// The value of this observation
     pub fn number(&self) -> &Number {
         &self.number
@@ -38,7 +43,7 @@ type I64ObserverCallback = Box<dyn Fn(ObserverResult<i64>) + Send + Sync + 'stat
 
 /// A callback argument for use with any Observer instrument that will be
 /// reported as a batch of observations.
-type BatchObserverCallback = Box<dyn Fn(BatchObserverResult) + Send + Sync>;
+pub type BatchObserverCallback = Box<dyn Fn(BatchObserverResult) + Send + Sync>;
 
 /// Data passed to an observer callback to capture observations for one
 /// asynchronous metric instrument.

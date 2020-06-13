@@ -1,8 +1,4 @@
-use crate::{
-    api,
-    api::metrics::{self, Meter, MeterProvider},
-    api::Provider,
-};
+use crate::{api, api::Provider};
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;

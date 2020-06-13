@@ -2,14 +2,14 @@ use crate::api::{
     metrics::{Descriptor, MetricsError, Number, NumberKind, Result},
     Context,
 };
-use crate::sdk::metrics::aggregators::{Buckets, Count, Histogram, Sum};
+use crate::sdk::export::metrics::{Buckets, Count, Histogram, Sum};
 use crate::sdk::metrics::export::metrics::Aggregator;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
 /// TODO
-pub fn histogram(desc: &Descriptor, boundaries: &Vec<f64>) -> HistogramAggregator {
-    let mut sorted_boundaries = boundaries.clone();
+pub fn histogram(desc: &Descriptor, boundaries: &[f64]) -> HistogramAggregator {
+    let mut sorted_boundaries = boundaries.to_owned();
     sorted_boundaries.sort_by(|a, b| a.partial_cmp(&b).unwrap());
 
     HistogramAggregator {
@@ -44,7 +44,7 @@ struct State {
 }
 
 impl State {
-    fn empty(boundaries: &Vec<f64>) -> Self {
+    fn empty(boundaries: &[f64]) -> Self {
         State {
             bucket_counts: Vec::with_capacity(boundaries.len() + 1),
             count: NumberKind::U64.zero(),
@@ -66,14 +66,16 @@ impl Count for HistogramAggregator {
         self.inner
             .lock()
             .map_err(From::from)
-            .map(|inner| inner.checkpoint.sum.to_u64())
+            .map(|inner| inner.checkpoint.sum.to_u64(&NumberKind::U64))
     }
 }
 impl Histogram for HistogramAggregator {
     fn histogram(&self) -> Result<Buckets> {
-        self.inner.lock().map_err(From::from).map(|inner| Buckets {
-            boundaries: inner.boundaries.clone(),
-            counts: inner.checkpoint.bucket_counts.clone(),
+        self.inner.lock().map_err(From::from).map(|inner| {
+            Buckets::new(
+                inner.boundaries.clone(),
+                inner.checkpoint.bucket_counts.clone(),
+            )
         })
     }
 }

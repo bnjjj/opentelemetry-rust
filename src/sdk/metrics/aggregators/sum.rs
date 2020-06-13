@@ -2,7 +2,7 @@ use crate::api::{
     metrics::{Descriptor, Number, Result},
     Context,
 };
-use crate::sdk::{export::metrics::Aggregator, metrics::aggregators::Sum};
+use crate::sdk::export::metrics::{Aggregator, Sum};
 use std::any::Any;
 use std::sync::Arc;
 

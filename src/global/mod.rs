@@ -76,4 +76,7 @@ mod trace;
 #[cfg(feature = "metrics")]
 pub use metrics::{meter, meter_provider, set_meter_provider};
 #[cfg(feature = "trace")]
-pub use trace::{set_provider, trace_provider, tracer};
+pub use trace::{
+    get_http_text_propagator, set_http_text_propagator, set_provider, trace_provider, tracer,
+    GenericProvider,
+};

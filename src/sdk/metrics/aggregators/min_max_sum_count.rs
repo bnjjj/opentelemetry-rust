@@ -2,10 +2,7 @@ use crate::api::{
     metrics::{Descriptor, MetricsError, Number, NumberKind, Result},
     Context,
 };
-use crate::sdk::{
-    export::metrics::Aggregator,
-    metrics::aggregators::{Count, Max, Min, MinMaxSumCount, Sum},
-};
+use crate::sdk::export::metrics::{Aggregator, Count, Max, Min, MinMaxSumCount, Sum};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::mem;
@@ -75,7 +72,7 @@ impl Count for MinMaxSumCountAggregator {
             inner
                 .checkpoint
                 .as_ref()
-                .map_or(0u64, |state| state.count.to_u64())
+                .map_or(0u64, |state| state.count.to_u64(&NumberKind::U64))
         })
     }
 }

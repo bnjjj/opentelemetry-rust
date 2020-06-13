@@ -9,23 +9,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct Number(AtomicU64);
 
 impl Number {
-    /// TODO
+    /// Assigns this number to the given other number. Both should be of the same kind.
     pub fn assign(&self, number_kind: &NumberKind, other: &Number) {
-        let current = self.0.load(Ordering::Acquire);
         let other = other.0.load(Ordering::Acquire);
         match number_kind {
             NumberKind::F64 => loop {
-                let new = f64::from_bits(other);
+                let current = self.0.load(Ordering::Acquire);
+                let new = u64_to_f64(other);
                 let swapped = self
                     .0
-                    .compare_and_swap(current, new.to_bits(), Ordering::Release);
+                    .compare_and_swap(current, f64_to_u64(new), Ordering::Release);
                 if swapped == current {
                     return;
                 }
             },
-            NumberKind::U64 => loop {
-                let new = other;
-                let swapped = self.0.compare_and_swap(current, new, Ordering::Release);
+            NumberKind::U64 | NumberKind::I64 => loop {
+                let current = self.0.load(Ordering::Acquire);
+                let swapped = self.0.compare_and_swap(current, other, Ordering::Release);
                 if swapped == current {
                     return;
                 }
@@ -33,16 +33,25 @@ impl Number {
         }
     }
 
-    /// TODO
+    /// Adds this number to the given other number. Both should be of the same kind.
     pub fn add(&self, number_kind: &NumberKind, other: &Number) {
         match number_kind {
+            NumberKind::I64 => loop {
+                let current = self.0.load(Ordering::Acquire);
+                let other = other.0.load(Ordering::Acquire);
+                let new = (current as i64 + other as i64) as u64;
+                let swapped = self.0.compare_and_swap(current, new, Ordering::Release);
+                if swapped == current {
+                    return;
+                }
+            },
             NumberKind::F64 => loop {
                 let current = self.0.load(Ordering::Acquire);
                 let other = other.0.load(Ordering::Acquire);
-                let new = f64::from_bits(current) + f64::from_bits(other);
+                let new = u64_to_f64(current) + u64_to_f64(other);
                 let swapped = self
                     .0
-                    .compare_and_swap(current, new.to_bits(), Ordering::Release);
+                    .compare_and_swap(current, f64_to_u64(new), Ordering::Release);
                 if swapped == current {
                     return;
                 }
@@ -59,58 +68,80 @@ impl Number {
         }
     }
 
-    /// TODO
-    pub fn to_u64(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
+    /// Casts the number to `i64`. May result in data/precision loss.
+    pub fn to_i64(&self, number_kind: &NumberKind) -> i64 {
+        let current = self.0.load(Ordering::SeqCst);
+
+        match number_kind {
+            NumberKind::F64 => u64_to_f64(current) as i64,
+            NumberKind::U64 | NumberKind::I64 => current as i64,
+        }
     }
 
-    /// TODO
+    /// Casts the number to `u64`. May result in data/precision loss.
+    pub fn to_u64(&self, number_kind: &NumberKind) -> u64 {
+        let current = self.0.load(Ordering::SeqCst);
+
+        match number_kind {
+            NumberKind::F64 => u64_to_f64(current) as u64,
+            NumberKind::U64 | NumberKind::I64 => current,
+        }
+    }
+
+    /// Casts the number to `f64`. May result in data/precision loss.
     pub fn to_f64(&self, number_kind: &NumberKind) -> f64 {
         let current = self.0.load(Ordering::SeqCst);
 
         match number_kind {
+            NumberKind::I64 => (current as i64) as f64,
+            NumberKind::F64 => u64_to_f64(current),
             NumberKind::U64 => current as f64,
-            NumberKind::F64 => f64::from_bits(current),
         }
     }
 
-    /// TODO
+    /// Compares this number to the given other number. Both should be of the same kind.
     pub fn partial_cmp(&self, number_kind: &NumberKind, other: &Number) -> Option<cmp::Ordering> {
         let current = self.0.load(Ordering::SeqCst);
         let other = other.0.load(Ordering::SeqCst);
         match number_kind {
+            NumberKind::I64 => (current as i64).partial_cmp(&(other as i64)),
             NumberKind::F64 => {
-                let current = f64::from_bits(current);
-                let other = f64::from_bits(other);
+                let current = u64_to_f64(current);
+                let other = u64_to_f64(other);
                 current.partial_cmp(&other)
             }
             NumberKind::U64 => current.partial_cmp(&other),
         }
     }
 
-    /// TODO
+    /// Checks if this value ia an f64 nan value. Do not use on non-f64 values.
     pub fn is_nan(&self) -> bool {
         let current = self.0.load(Ordering::Acquire);
-        f64::from_bits(current).is_nan()
+        u64_to_f64(current).is_nan()
     }
 
-    /// TODO
+    /// `true` if the actual value is less than zero.
     pub fn is_negative(&self, number_kind: &NumberKind) -> bool {
         match number_kind {
-            NumberKind::U64 => true,
+            NumberKind::I64 => {
+                let current = self.0.load(Ordering::Acquire);
+                (current as i64).is_positive()
+            }
             NumberKind::F64 => {
                 let current = self.0.load(Ordering::Acquire);
-                f64::from_bits(current).is_sign_positive()
+                u64_to_f64(current).is_sign_positive()
             }
+            NumberKind::U64 => true,
         }
     }
 
-    /// TODO
+    /// Return loaded data for debugging purposes
     pub fn to_debug(&self, kind: &NumberKind) -> Box<dyn fmt::Debug> {
         let current = self.0.load(Ordering::SeqCst);
         match kind {
+            NumberKind::I64 => Box::new(current as i64),
+            NumberKind::F64 => Box::new(u64_to_f64(current)),
             NumberKind::U64 => Box::new(current),
-            NumberKind::F64 => Box::new(f64::from_bits(current)),
         }
     }
 }
@@ -123,7 +154,7 @@ impl Clone for Number {
 
 impl From<f64> for Number {
     fn from(f: f64) -> Self {
-        Number(AtomicU64::new(f.to_bits()))
+        Number(AtomicU64::new(f64_to_u64(f)))
     }
 }
 
@@ -139,34 +170,52 @@ impl From<u64> for Number {
     }
 }
 
-/// TODO
+/// A descriptor for the encoded data type of a `Number`
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub enum NumberKind {
-    /// TODO
+    /// An Number that stores `i64` values.
+    I64,
+    /// An Number that stores `f64` values.
     F64,
-    /// TODO
+    /// An Number that stores `u64` values.
     U64,
 }
 
 impl NumberKind {
-    /// TODO
+    /// Returns a zero number
     pub fn zero(&self) -> Number {
-        Number::default()
+        match self {
+            NumberKind::I64 => 0i64.into(),
+            NumberKind::F64 => 0f64.into(),
+            NumberKind::U64 => 0u64.into(),
+        }
     }
 
     /// TODO
     pub fn max(&self) -> Number {
         match self {
-            NumberKind::U64 => u64::MAX.into(),
+            NumberKind::I64 => i64::MAX.into(),
             NumberKind::F64 => f64::MAX.into(),
+            NumberKind::U64 => u64::MAX.into(),
         }
     }
 
     /// TODO
     pub fn min(&self) -> Number {
         match self {
-            NumberKind::U64 => u64::MIN.into(),
+            NumberKind::I64 => i64::MIN.into(),
             NumberKind::F64 => f64::MIN.into(),
+            NumberKind::U64 => u64::MIN.into(),
         }
     }
+}
+
+#[inline]
+fn u64_to_f64(val: u64) -> f64 {
+    f64::from_bits(val)
+}
+
+#[inline]
+fn f64_to_u64(val: f64) -> u64 {
+    f64::to_bits(val)
 }

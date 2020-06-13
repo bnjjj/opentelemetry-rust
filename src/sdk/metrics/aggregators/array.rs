@@ -2,9 +2,9 @@ use crate::api::{
     metrics::{Descriptor, MetricsError, Number, NumberKind, Result},
     Context,
 };
-use crate::sdk::metrics::{
-    aggregators::{Count, Distribution, Max, Min, MinMaxSumCount, Quantile, Sum},
-    Aggregator,
+use crate::sdk::{
+    export::metrics::{Count, Distribution, Max, Min, MinMaxSumCount, Points, Quantile, Sum},
+    metrics::Aggregator,
 };
 use std::any::Any;
 use std::cmp;
@@ -71,6 +71,15 @@ impl Quantile for ArrayAggregator {
 
 impl Distribution for ArrayAggregator {}
 
+impl Points for ArrayAggregator {
+    fn points(&self) -> Result<Vec<Number>> {
+        self.inner
+            .lock()
+            .map_err(Into::into)
+            .map(|inner| inner.checkpoint.0.clone())
+    }
+}
+
 impl Aggregator for ArrayAggregator {
     fn update_with_context(
         &self,
@@ -134,14 +143,14 @@ impl Aggregator for ArrayAggregator {
 struct Inner {
     /// checkpoint_sum needs to be aligned for 64-bit atomic operations.
     checkpoint_sum: Number,
-    current: Points,
-    checkpoint: Points,
+    current: PointsData,
+    checkpoint: PointsData,
 }
 
 #[derive(Debug, Default)]
-struct Points(Vec<Number>);
+struct PointsData(Vec<Number>);
 
-impl Points {
+impl PointsData {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -152,22 +161,23 @@ impl Points {
 
     fn sort(&mut self, kind: &NumberKind) {
         match kind {
+            NumberKind::I64 => self.0.sort_by(|a, b| a.to_i64(kind).cmp(&b.to_i64(kind))),
             NumberKind::F64 => self.0.sort_by(|a, b| {
                 // FIXME better handling of f64 nan values
                 a.to_f64(kind)
                     .partial_cmp(&b.to_f64(kind))
                     .unwrap_or(cmp::Ordering::Less)
             }),
-            NumberKind::U64 => self.0.sort_by(|a, b| a.to_u64().cmp(&b.to_u64())),
+            NumberKind::U64 => self.0.sort_by(|a, b| a.to_u64(kind).cmp(&b.to_u64(kind))),
         }
     }
-    fn combine(&mut self, kind: &NumberKind, other: &Points) {
+    fn combine(&mut self, kind: &NumberKind, other: &PointsData) {
         self.0.append(&mut other.0.clone());
         self.sort(kind)
     }
 }
 
-impl Quantile for Points {
+impl Quantile for PointsData {
     fn quantile(&self, q: f64) -> Result<Number> {
         if self.0.is_empty() {
             return Err(MetricsError::NoDataCollected);

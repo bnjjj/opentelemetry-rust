@@ -7,7 +7,7 @@ use crate::api::{labels, Context, KeyValue};
 use crate::sdk::{
     export::{
         self,
-        metrics::{aggregator, Aggregator, Integrator, LockedIntegrator},
+        metrics::{Aggregator, Integrator, LockedIntegrator},
     },
     resource::Resource,
 };
@@ -149,21 +149,7 @@ fn collect_async(labels: &[KeyValue], observations: &[Observation]) {
 impl AsyncInstrumentState {
     fn run(&self) {
         for (runner, instrument) in self.runners.iter() {
-            // // The runner must be a single or batch runner, no
-            // // other implementations are possible because the
-            // // interface has un-exported methods.
-            // if let Some(single_runner) = rp.as_any().downcast_ref::<AsyncSingleRunner>() {
-            //     single_runner.run(rp.instrument, &collector.collect_async);
-            //     continue;
-            // }
-            // if let Some(multi_runner) = rp.as_any().downcast_ref::<AsyncBatchRunner>() {
-            //     multi_runner.run(rp.instrument, &collector.collect_async);
-            //     continue;
-            // }
-            //
-            // if let Some(error_handler) = collector.error_handler() {
-            //     error_handler.call(MetricsError::InvalidAsyncRunner(format!("{:?}", rp)))
-            // }
+            // TODO see if batch needs other logic
             runner.run(instrument.clone(), collect_async)
         }
     }
@@ -455,7 +441,7 @@ pub struct AsyncInstrument {
 
 impl AsyncInstrument {
     fn observe(&self, number: &Number, labels: &labels::Set) {
-        if let Err(err) = aggregator::range_test(number, &self.instrument.descriptor) {
+        if let Err(err) = aggregators::range_test(number, &self.instrument.descriptor) {
             if let Some(error_handler) = self.instrument.meter.0.error_handler.as_ref() {
                 error_handler.call(err)
             }
@@ -475,7 +461,12 @@ impl AsyncInstrument {
             labels.equivalent().hash(&mut hasher);
             let label_hash = hasher.finish();
             if let Some(recorder) = recorders.as_mut().and_then(|rec| rec.get_mut(&label_hash)) {
-                let current_epoch = self.instrument.meter.0.current_epoch.to_u64();
+                let current_epoch = self
+                    .instrument
+                    .meter
+                    .0
+                    .current_epoch
+                    .to_u64(&NumberKind::U64);
                 if recorder.observed_epoch == current_epoch {
                     // last value wins for Observers, so if we see the same labels
                     // in the current epoch, we replace the old recorder
@@ -507,12 +498,18 @@ impl AsyncInstrument {
             // This may store nil recorder in the map, thus disabling the
             // asyncInstrument for the labelset for good. This is intentional,
             // but will be revisited later.
+            let observed_epoch = self
+                .instrument
+                .meter
+                .0
+                .current_epoch
+                .to_u64(&NumberKind::U64);
             recorders.as_mut().unwrap().insert(
                 label_hash,
                 LabeledRecorder {
                     recorder: recorder.clone(),
                     labels: labels::Set::with_equivalent(labels.equivalent().clone()),
-                    observed_epoch: self.instrument.meter.0.current_epoch.to_u64(),
+                    observed_epoch,
                 },
             );
 
@@ -579,7 +576,7 @@ impl sdk_api::BoundSyncInstrument for Record {
     fn record_one_with_context<'a>(&self, cx: &Context, number: Number) {
         // check if the instrument is disabled according to the AggregationSelector.
         if let Some(recorder) = &self.recorder {
-            if let Err(err) = aggregator::range_test(
+            if let Err(err) = aggregators::range_test(
                 &number,
                 &self.instrument.instrument.descriptor,
             )

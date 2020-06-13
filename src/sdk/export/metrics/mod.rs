@@ -7,9 +7,12 @@ use crate::sdk::resource::Resource;
 use std::fmt;
 use std::sync::Arc;
 
-pub mod aggregator;
+mod aggregation;
 
-pub use aggregator::Aggregator;
+pub use aggregation::{
+    Aggregator, Buckets, Count, Distribution, Histogram, LastValue, Max, Min, MinMaxSumCount,
+    Points, Quantile, Sum,
+};
 
 /// Integrator is responsible for deciding which kind of aggregation to
 /// use (via AggregationSelector), gathering exported results from the

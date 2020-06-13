@@ -6,11 +6,11 @@ use crate::api::{
 };
 use crate::global;
 use crate::sdk::{
-    export::metrics::{CheckpointSet, Exporter},
+    export::metrics::{CheckpointSet, Count, Exporter, LastValue, Max, Min, Quantile, Sum},
     metrics::{
         aggregators::{
-            ArrayAggregator, Count, HistogramAggregator, LastValue, LastValueAggregator, Max, Min,
-            MinMaxSumCountAggregator, Quantile, Sum, SumAggregator,
+            ArrayAggregator, HistogramAggregator, LastValueAggregator, MinMaxSumCountAggregator,
+            SumAggregator,
         },
         controllers::{self, PushController, PushControllerWorker},
         selectors::simple,
@@ -194,21 +194,11 @@ where
 
         self.writer.lock().map_err(From::from).and_then(|mut w| {
             let formatted = match &self.formatter {
-                Some(formatter) => formatter.0(batch)?.to_string(),
+                Some(formatter) => formatter.0(batch)?,
                 None => format!("{:?}\n", batch),
             };
             w.write_all(formatted.as_bytes()).map_err(From::from)
         })
-        // let data = serde_json::to_value(batch)?;
-        // if self.pretty_print {
-        //     self.writer
-        //         .write_all(format!("{:#}", data).as_bytes())
-        //         .map_err(From::from)
-        // } else {
-        //     self.writer
-        //         .write_all(data.to_string().as_bytes())
-        //         .map_err(From::from)
-        // }
     }
 }
 

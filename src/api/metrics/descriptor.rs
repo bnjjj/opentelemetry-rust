@@ -1,4 +1,4 @@
-use crate::api::metrics::{Config, InstrumentKind, NumberKind};
+use crate::api::metrics::{InstrumentConfig, InstrumentKind, NumberKind};
 
 /// Descriptor contains all the settings that describe an instrument, including
 /// its name, metric kind, number kind, and the configurable options.
@@ -7,7 +7,7 @@ pub struct Descriptor {
     name: String,
     instrument_kind: InstrumentKind,
     number_kind: NumberKind,
-    config: Config,
+    config: InstrumentConfig,
 }
 
 impl Descriptor {
@@ -22,7 +22,7 @@ impl Descriptor {
             name,
             instrument_kind,
             number_kind,
-            config: Config::with_library_name(library_name),
+            config: InstrumentConfig::with_instrumentation_name(library_name),
         }
     }
 
@@ -60,6 +60,6 @@ impl Descriptor {
     /// LibraryName returns the metric instrument's library name, typically
     /// given via a call to Provider.Meter().
     pub fn library_name(&self) -> &str {
-        self.config.library_name.as_str()
+        self.config.instrumentation_name.as_str()
     }
 }

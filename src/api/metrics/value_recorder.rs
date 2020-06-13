@@ -61,22 +61,22 @@ where
 /// TODO
 #[derive(Debug)]
 pub struct ValueRecorderBuilder<'a, T> {
-    pub(crate) meter: &'a Meter,
-    pub(crate) descriptor: Descriptor,
-    pub(crate) _marker: marker::PhantomData<T>,
+    meter: &'a Meter,
+    descriptor: Descriptor,
+    _marker: marker::PhantomData<T>,
 }
 
 impl<'a, T> ValueRecorderBuilder<'a, T> {
     /// TODO
-    pub fn new(
-        meter: &'a Meter,
-        name: String,
-        instrument_kind: InstrumentKind,
-        number_kind: NumberKind,
-    ) -> Self {
+    pub(crate) fn new(meter: &'a Meter, name: String, number_kind: NumberKind) -> Self {
         ValueRecorderBuilder {
             meter,
-            descriptor: Descriptor::new(name, meter.name.clone(), instrument_kind, number_kind),
+            descriptor: Descriptor::new(
+                name,
+                meter.instrumentation_name.clone(),
+                InstrumentKind::ValueRecorder,
+                number_kind,
+            ),
             _marker: marker::PhantomData,
         }
     }

@@ -2,7 +2,7 @@ use crate::api::{
     metrics::{Descriptor, MetricsError, Number, Result},
     Context,
 };
-use crate::sdk::{export::metrics::Aggregator, metrics::aggregators::LastValue};
+use crate::sdk::export::metrics::{Aggregator, LastValue};
 use std::any::Any;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -77,7 +77,7 @@ impl LastValue for LastValueAggregator {
     fn last_value(&self) -> Result<(Number, SystemTime)> {
         self.inner.lock().map_err(Into::into).and_then(|inner| {
             if let Some(checkpoint) = &inner.checkpoint {
-                Ok((checkpoint.value.clone(), checkpoint.timestamp.clone()))
+                Ok((checkpoint.value.clone(), checkpoint.timestamp))
             } else {
                 Err(MetricsError::NoDataCollected)
             }
