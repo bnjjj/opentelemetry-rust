@@ -5,9 +5,9 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-/// TODO
+/// The interface an SDK must implement to supply a Meter implementation.
 pub trait MeterCore: fmt::Debug {
-    /// TODO
+    /// Atomically record a batch of measurements.
     fn record_batch_with_context(
         &self,
         cx: &Context,
@@ -15,53 +15,59 @@ pub trait MeterCore: fmt::Debug {
         measurements: Vec<Measurement>,
     );
 
-    /// TODO
-    fn new_sync_instrument(&self, descriptor: Descriptor) -> Result<Arc<dyn SyncInstrument>>;
+    /// Create a new synchronous instrument implementation.
+    fn new_sync_instrument(
+        &self,
+        descriptor: Descriptor,
+    ) -> Result<Arc<dyn SyncInstrument + Send + Sync>>;
 
-    /// TODO
+    /// Create a new asynchronous instrument implementation.
     fn new_async_instrument(
         &self,
         descriptor: Descriptor,
         runner: AsyncRunner,
-    ) -> Result<Arc<dyn AsyncInstrument>>;
+    ) -> Result<Arc<dyn AsyncInstrument + Send + Sync>>;
 }
 
-/// TODO
+/// A common interface for synchronous and asynchronous instruments.
 pub trait Instrument: fmt::Debug {
     /// Description of the instrument's descriptor
-    fn descriptor(&self) -> &str;
+    fn descriptor(&self) -> &Descriptor;
 }
 
-/// TODO
-pub trait SyncInstrument: fmt::Debug {
-    /// TODO
-    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Arc<dyn BoundSyncInstrument + Send + Sync>;
+/// The implementation-level interface to a generic synchronous instrument
+/// (e.g., ValueRecorder and Counter instruments).
+pub trait SyncInstrument: Instrument {
+    /// Creates an implementation-level bound instrument, binding a label set
+    /// with this instrument implementation.
+    fn bind<'a>(&self, labels: &'a [KeyValue]) -> Arc<dyn SyncBoundInstrument + Send + Sync>;
 
-    /// TODO
+    /// Capture a single synchronous metric event.
     fn record_one<'a>(&self, number: Number, labels: &'a [KeyValue]) {
         self.record_one_with_context(&Context::current(), number, labels)
     }
 
-    /// TODO
+    /// Capture a single synchronous metric event with context.
     fn record_one_with_context<'a>(&self, cx: &Context, number: Number, labels: &'a [KeyValue]);
 
     /// Returns self as any
     fn as_any(&self) -> &dyn Any;
 }
 
-/// TODO
-pub trait BoundSyncInstrument: fmt::Debug + Send + Sync {
-    /// TODO
+/// The implementation-level interface to a generic synchronous bound instrument
+pub trait SyncBoundInstrument: fmt::Debug + Send + Sync {
+    /// Capture a single synchronous metric event.
     fn record_one(&self, number: Number) {
         self.record_one_with_context(&Context::current(), number)
     }
 
-    /// TODO
+    /// Capture a single synchronous metric event with context.
     fn record_one_with_context(&self, cx: &Context, number: Number);
 }
 
-/// TODO
+/// An implementation-level interface to an asynchronous instrument (e.g.,
+/// Observer instruments).
 pub trait AsyncInstrument: Instrument {
-    /// TODO
+    /// The underlying type as `Any` to support downcasting.
     fn as_any(&self) -> &dyn Any;
 }

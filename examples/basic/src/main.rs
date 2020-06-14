@@ -1,8 +1,10 @@
-use opentelemetry::api::metrics::{self, F64ObserverResult, MetricsError};
+use futures::stream::{Stream, StreamExt};
+use opentelemetry::api::metrics::{self, MetricsError, ObserverResult};
 use opentelemetry::api::{Context, CorrelationContextExt, Key, KeyValue, TraceContextExt, Tracer};
 use opentelemetry::exporter;
 use opentelemetry::sdk::metrics::PushController;
 use opentelemetry::{global, sdk};
+use std::time::Duration;
 
 fn init_tracer() -> thrift::Result<()> {
     let exporter = opentelemetry_jaeger::Exporter::builder()
@@ -30,10 +32,14 @@ fn init_tracer() -> thrift::Result<()> {
     Ok(())
 }
 
+// Skip first immediate tick from tokio, not needed for async_std.
+fn delayed_interval(duration: Duration) -> impl Stream<Item = tokio::time::Instant> {
+    tokio::time::interval(duration).skip(1)
+}
+
 fn init_meter() -> metrics::Result<PushController> {
-    exporter::metrics::stdout(tokio::spawn, tokio::time::interval)
+    exporter::metrics::stdout(tokio::spawn, delayed_interval)
         .with_quantiles(vec![0.5, 0.9, 0.99])
-        .with_pretty_print(false)
         .with_formatter(|batch| {
             serde_json::to_value(batch)
                 .map(|value| value.to_string())
@@ -63,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tracer = global::tracer("ex.com/basic");
     let meter = global::meter("ex.com/basic");
 
-    let one_metric_callback = |res: F64ObserverResult| res.observe(1.0, COMMON_LABELS.as_ref());
+    let one_metric_callback = |res: ObserverResult<f64>| res.observe(1.0, COMMON_LABELS.as_ref());
     let _ = meter
         .f64_value_observer("ex.com.one", one_metric_callback)
         .with_description("A ValueObserver set to 1.0")

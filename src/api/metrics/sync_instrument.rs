@@ -5,12 +5,35 @@ use crate::api::{
 use std::marker;
 use std::sync::Arc;
 
-/// TODO
+/// Measurement is used for reporting a synchronous batch of metric values.
+/// Instances of this type should be created by synchronous instruments (e.g.,
+/// `Counter::measurement`).
 #[derive(Debug)]
 pub struct Measurement {
-    // number needs to be aligned for 64-bit atomic operations.
-    pub(crate) number: Number,
-    pub(crate) instrument: Arc<dyn sdk_api::SyncInstrument>,
+    number: Number,
+    instrument: Arc<dyn sdk_api::SyncInstrument>,
+}
+
+impl Measurement {
+    /// Create a new measurement for an instrument
+    pub(crate) fn new(number: Number, instrument: Arc<dyn sdk_api::SyncInstrument>) -> Self {
+        Measurement { number, instrument }
+    }
+
+    /// The number recorded by this measurement
+    pub fn number(&self) -> &Number {
+        &self.number
+    }
+
+    /// Convert this measurement into the underlying number
+    pub fn into_number(self) -> Number {
+        self.number
+    }
+
+    /// The instrument that recorded this measurement
+    pub fn instrument(&self) -> &Arc<dyn sdk_api::SyncInstrument> {
+        &self.instrument
+    }
 }
 
 /// Wrapper around a sdk-implemented sync instrument for a given type
@@ -30,9 +53,9 @@ impl<T> SyncInstrument<T> {
     }
 
     /// Create a new bound sync instrument
-    pub(crate) fn bind(&self, labels: &[KeyValue]) -> BoundSyncInstrument<T> {
+    pub(crate) fn bind(&self, labels: &[KeyValue]) -> SyncBoundInstrument<T> {
         let bound_instrument = self.instrument.bind(labels);
-        BoundSyncInstrument {
+        SyncBoundInstrument {
             bound_instrument,
             _marker: marker::PhantomData,
         }
@@ -51,12 +74,12 @@ impl<T> SyncInstrument<T> {
 
 /// Wrapper around a sdk-implemented sync bound instrument
 #[derive(Debug)]
-pub(crate) struct BoundSyncInstrument<T> {
-    bound_instrument: Arc<dyn sdk_api::BoundSyncInstrument>,
+pub(crate) struct SyncBoundInstrument<T> {
+    bound_instrument: Arc<dyn sdk_api::SyncBoundInstrument>,
     _marker: marker::PhantomData<T>,
 }
 
-impl<T> BoundSyncInstrument<T> {
+impl<T> SyncBoundInstrument<T> {
     /// Record a value directly to the underlying instrument
     pub(crate) fn direct_record(&self, number: Number) {
         self.bound_instrument.record_one(number)

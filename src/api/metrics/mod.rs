@@ -35,10 +35,10 @@ pub use sync_instrument::Measurement;
 pub use up_down_counter::{BoundUpDownCounter, UpDownCounter, UpDownCounterBuilder};
 pub use value_recorder::{BoundValueRecorder, ValueRecorder, ValueRecorderBuilder};
 
-/// TODO
+/// A specialized `Result` type for metric operations.
 pub type Result<T> = result::Result<T, MetricsError>;
 
-/// TODO
+/// Errors returned by the metrics API.
 #[derive(Error, Debug)]
 pub enum MetricsError {
     /// Other errors not covered by specific cases.
@@ -62,6 +62,9 @@ pub enum MetricsError {
     /// Errors when requesting data when no data has been collected
     #[error("no data collected by this aggregator")]
     NoDataCollected,
+    /// Errors when registering to instruments with the same name and kind
+    #[error("A metric was already registered by this name with another kind or number type: {0}")]
+    MetricKindMismatch(String),
 }
 
 impl<T> From<PoisonError<T>> for MetricsError {

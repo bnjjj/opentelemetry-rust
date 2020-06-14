@@ -1,6 +1,6 @@
 //! # OpenTelemetry Metrics SDK
 use crate::api::metrics::{
-    sdk_api::{self, BoundSyncInstrument as _},
+    sdk_api::{self, SyncBoundInstrument as _},
     AsyncRunner, Descriptor, Measurement, MetricsError, Number, NumberKind, Observation, Result,
 };
 use crate::api::{labels, Context, KeyValue};
@@ -402,11 +402,17 @@ impl SyncInstrument {
     }
 }
 
+impl sdk_api::Instrument for SyncInstrument {
+    fn descriptor(&self) -> &Descriptor {
+        self.instrument.descriptor()
+    }
+}
+
 impl sdk_api::SyncInstrument for SyncInstrument {
     fn bind<'a>(
         &self,
         labels: &'a [crate::api::KeyValue],
-    ) -> Arc<dyn sdk_api::BoundSyncInstrument + Send + Sync> {
+    ) -> Arc<dyn sdk_api::SyncBoundInstrument + Send + Sync> {
         self.acquire_handle(labels)
     }
     fn record_one_with_context<'a>(
@@ -519,8 +525,8 @@ impl AsyncInstrument {
 }
 
 impl sdk_api::Instrument for AsyncInstrument {
-    fn descriptor(&self) -> &str {
-        "AsyncInstrument"
+    fn descriptor(&self) -> &Descriptor {
+        self.instrument.descriptor()
     }
 }
 
@@ -572,7 +578,7 @@ struct Record {
     recorder: Option<Arc<dyn Aggregator + Send + Sync>>,
 }
 
-impl sdk_api::BoundSyncInstrument for Record {
+impl sdk_api::SyncBoundInstrument for Record {
     fn record_one_with_context<'a>(&self, cx: &Context, number: Number) {
         // check if the instrument is disabled according to the AggregationSelector.
         if let Some(recorder) = &self.recorder {
@@ -603,11 +609,17 @@ pub struct Instrument {
     meter: Accumulator,
 }
 
+impl sdk_api::Instrument for Instrument {
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
+    }
+}
+
 impl sdk_api::MeterCore for Accumulator {
     fn new_sync_instrument(
         &self,
         descriptor: Descriptor,
-    ) -> Result<Arc<dyn sdk_api::SyncInstrument>> {
+    ) -> Result<Arc<dyn sdk_api::SyncInstrument + Send + Sync>> {
         Ok(Arc::new(SyncInstrument {
             instrument: Arc::new(Instrument {
                 descriptor,
@@ -624,7 +636,11 @@ impl sdk_api::MeterCore for Accumulator {
     ) {
         // var labelsPtr *label.Set
         for measure in measurements.into_iter() {
-            if let Some(instrument) = measure.instrument.as_any().downcast_ref::<SyncInstrument>() {
+            if let Some(instrument) = measure
+                .instrument()
+                .as_any()
+                .downcast_ref::<SyncInstrument>()
+            {
                 let handle = instrument.acquire_handle(labels);
 
                 // Re-use labels for the next measurement.
@@ -632,7 +648,7 @@ impl sdk_api::MeterCore for Accumulator {
                 //     labelsPtr = h.labels
                 // }
 
-                handle.record_one_with_context(cx, measure.number);
+                handle.record_one_with_context(cx, measure.into_number());
             }
         }
     }
@@ -641,7 +657,7 @@ impl sdk_api::MeterCore for Accumulator {
         &self,
         descriptor: Descriptor,
         runner: AsyncRunner,
-    ) -> Result<Arc<dyn sdk_api::AsyncInstrument>> {
+    ) -> Result<Arc<dyn sdk_api::AsyncInstrument + Send + Sync>> {
         let instrument = Arc::new(AsyncInstrument {
             instrument: Arc::new(Instrument {
                 descriptor,

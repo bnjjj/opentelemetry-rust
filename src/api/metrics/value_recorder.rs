@@ -1,64 +1,63 @@
 use crate::api::metrics::{
-    sdk_api, Descriptor, InstrumentKind, Measurement, Meter, Number, NumberKind,
+    sync_instrument::{SyncBoundInstrument, SyncInstrument},
+    Descriptor, InstrumentKind, Measurement, Meter, Number, NumberKind, Result,
 };
 use crate::api::{Context, KeyValue};
 use std::marker;
-use std::sync::Arc;
 
-/// TODO
+/// ValueRecorder is a metric that records per-request non-additive values.
 #[derive(Debug)]
-pub struct ValueRecorder<T> {
-    instrument: Arc<dyn sdk_api::SyncInstrument>,
-    _marker: marker::PhantomData<T>,
-}
+pub struct ValueRecorder<T>(SyncInstrument<T>);
 
 impl<T> ValueRecorder<T>
 where
     T: Into<Number>,
 {
-    /// TODO
+    /// Creates a bound instrument for this ValueRecorder. The labels are
+    /// associated with values recorded via subsequent calls to record.
     pub fn bind<'a>(&self, labels: &'a [KeyValue]) -> BoundValueRecorder<'a, T> {
-        let instrument = self.instrument.bind(labels);
+        let bound_instrument = self.0.bind(labels);
         BoundValueRecorder {
             labels,
-            instrument,
-            _marker: marker::PhantomData,
+            bound_instrument,
         }
     }
 
-    /// TODO
+    /// Creates a `Measurement` object to use with batch recording.
     pub fn measurement(&self, value: T) -> Measurement {
-        Measurement {
-            number: value.into(),
-            instrument: self.instrument.clone(),
-        }
+        Measurement::new(value.into(), self.0.instrument().clone())
     }
 }
 
-/// TODO
+/// BoundValueRecorder is a bound instrument for recording  per-request
+/// non-additive values.
+///
+/// It inherits the Unbind function from syncBoundInstrument.
 #[derive(Debug)]
 pub struct BoundValueRecorder<'a, T> {
     labels: &'a [KeyValue],
-    instrument: Arc<dyn sdk_api::BoundSyncInstrument + Send + Sync>,
-    _marker: marker::PhantomData<T>,
+    bound_instrument: SyncBoundInstrument<T>,
 }
 
 impl<'a, T> BoundValueRecorder<'a, T>
 where
     T: Into<Number>,
 {
-    /// TODO
+    /// Adds a new value to the list of ValueRecorder's records. The labels
+    /// should contain the keys and values to be associated with this value.
     pub fn record(&self, value: T) {
         self.record_with_context(&Context::current(), value)
     }
 
-    /// TODO
-    pub fn record_with_context(&self, cx: &Context, value: T) {
-        self.instrument.record_one_with_context(cx, value.into())
+    /// Adds a new value to the list of ValueRecorder's records with context.
+    /// The labels should contain the keys and values to be associated with this
+    /// value.
+    pub fn record_with_context(&self, _cx: &Context, value: T) {
+        self.bound_instrument.direct_record(value.into())
     }
 }
 
-/// TODO
+/// Initialization configuration for a given `ValueRecorder`.
 #[derive(Debug)]
 pub struct ValueRecorderBuilder<'a, T> {
     meter: &'a Meter,
@@ -67,7 +66,6 @@ pub struct ValueRecorderBuilder<'a, T> {
 }
 
 impl<'a, T> ValueRecorderBuilder<'a, T> {
-    /// TODO
     pub(crate) fn new(meter: &'a Meter, name: String, number_kind: NumberKind) -> Self {
         ValueRecorderBuilder {
             meter,
@@ -81,17 +79,27 @@ impl<'a, T> ValueRecorderBuilder<'a, T> {
         }
     }
 
-    /// TODO
+    /// Set the description for this `ValueRecorder`
     pub fn with_description<S: Into<String>>(mut self, description: S) -> Self {
         self.descriptor.set_description(description.into());
         self
     }
 
-    /// TODO
+    /// Creates a new value recorder.
+    pub fn try_init(self) -> Result<ValueRecorder<T>> {
+        let instrument = self.meter.new_sync_instrument(self.descriptor)?;
+        Ok(ValueRecorder(SyncInstrument::new(instrument)))
+    }
+
+    /// Creates a new value recorder.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the instrument cannot be created. Use try_init if you want to
+    /// handle errors.
     pub fn init(self) -> ValueRecorder<T> {
-        ValueRecorder {
-            instrument: self.meter.new_sync_instrument(self.descriptor).unwrap(),
-            _marker: marker::PhantomData,
-        }
+        ValueRecorder(SyncInstrument::new(
+            self.meter.new_sync_instrument(self.descriptor).unwrap(),
+        ))
     }
 }

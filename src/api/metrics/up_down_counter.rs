@@ -1,6 +1,6 @@
 use crate::api::{
     metrics::{
-        sync_instrument::{BoundSyncInstrument, SyncInstrument},
+        sync_instrument::{SyncBoundInstrument, SyncInstrument},
         Descriptor, InstrumentKind, Measurement, Meter, Number, NumberKind, Result,
     },
     KeyValue,
@@ -33,10 +33,7 @@ where
 
     /// Creates a Measurement for use with batch recording.
     pub fn measurement(&self, value: T) -> Measurement {
-        Measurement {
-            number: value.into(),
-            instrument: self.0.instrument().clone(),
-        }
+        Measurement::new(value.into(), self.0.instrument().clone())
     }
 }
 
@@ -44,7 +41,7 @@ where
 #[derive(Debug)]
 pub struct BoundUpDownCounter<'a, T> {
     labels: &'a [KeyValue],
-    bound_instrument: BoundSyncInstrument<T>,
+    bound_instrument: SyncBoundInstrument<T>,
 }
 
 impl<'a, T> BoundUpDownCounter<'a, T>
@@ -87,11 +84,6 @@ impl<'a, T> UpDownCounterBuilder<'a, T> {
     }
 
     /// Creates a new counter instrument.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the instrument cannot be created. Use try_init if you want to
-    /// handle errors.
     pub fn try_init(self) -> Result<UpDownCounter<T>> {
         let instrument = self.meter.new_sync_instrument(self.descriptor)?;
         Ok(UpDownCounter(SyncInstrument::new(instrument)))

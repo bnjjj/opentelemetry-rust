@@ -57,9 +57,8 @@ impl Descriptor {
         self.config.unit.as_ref().map(|unit| unit.as_ref())
     }
 
-    /// LibraryName returns the metric instrument's library name, typically
-    /// given via a call to Provider.Meter().
-    pub fn library_name(&self) -> &str {
+    /// The name of the library that provided instrumentation for this instrument.
+    pub fn instrumentation_name(&self) -> &str {
         self.config.instrumentation_name.as_str()
     }
 }
