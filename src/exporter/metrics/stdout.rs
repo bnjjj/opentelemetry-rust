@@ -1,8 +1,8 @@
 //! Stdout Metrics Exporter
-use crate::api::labels;
 use crate::api::{
-    metrics,
+    labels, metrics,
     metrics::{MetricsError, Result},
+    KeyValue,
 };
 use crate::global;
 use crate::sdk::{
@@ -87,7 +87,6 @@ impl fmt::Debug for ExportNumeric {
 
 #[cfg(feature = "serialize")]
 impl Serialize for ExportNumeric {
-    #[cfg(feature = "serialize")]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -118,6 +117,14 @@ where
             let agg = record.aggregator();
             let kind = desc.number_kind();
             let encoded_resource = record.resource().encoded(self.label_encoder.as_ref());
+            let mut encoded_inst_labels = String::new();
+            if !desc.instrumentation_name().is_empty() {
+                let inst_labels = labels::Set::from([KeyValue::new(
+                    "instrumentation.name",
+                    desc.instrumentation_name(),
+                )]);
+                encoded_inst_labels = inst_labels.encoded(Some(self.label_encoder.as_ref()));
+            }
 
             let mut expose = ExpoLine::default();
 
@@ -176,10 +183,19 @@ where
 
             sb.push_str(desc.name());
 
-            if !encoded_labels.is_empty() || !encoded_resource.is_empty() {
+            if !encoded_labels.is_empty()
+                || !encoded_resource.is_empty()
+                || !encoded_inst_labels.is_empty()
+            {
                 sb.push_str("{");
                 sb.push_str(&encoded_resource);
-                if !encoded_labels.is_empty() && !encoded_resource.is_empty() {
+                if !encoded_inst_labels.is_empty() && !encoded_resource.is_empty() {
+                    sb.push_str(",");
+                }
+                sb.push_str(&encoded_inst_labels);
+                if !encoded_labels.is_empty()
+                    && (!encoded_inst_labels.is_empty() || !encoded_resource.is_empty())
+                {
                     sb.push_str(",");
                 }
                 sb.push_str(&encoded_labels);

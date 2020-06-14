@@ -5,28 +5,24 @@ use crate::api::{
 use crate::sdk::export::metrics::{Aggregator, Count, Max, Min, MinMaxSumCount, Sum};
 use std::any::Any;
 use std::cmp::Ordering;
-use std::mem;
 use std::sync::{Arc, Mutex};
 
-/// TODO
+/// Create a new `MinMaxSumCountAggregator`
 pub fn min_max_sum_count(descriptor: &Descriptor) -> MinMaxSumCountAggregator {
     let kind = descriptor.number_kind().clone();
     MinMaxSumCountAggregator {
-        inner: Mutex::new(Inner {
-            current: State::empty(&kind),
-            checkpoint: None,
-        }),
+        inner: Mutex::new(Inner { state: None }),
         kind,
     }
 }
 
 #[derive(Debug)]
 struct Inner {
-    current: State,
-    checkpoint: Option<State>,
+    state: Option<State>,
 }
 
-///TODO
+/// An `Aggregator` that aggregates events that form a distribution, keeping
+/// only the min, max, sum, and count.
 #[derive(Debug)]
 pub struct MinMaxSumCountAggregator {
     inner: Mutex<Inner>,
@@ -37,7 +33,7 @@ impl Min for MinMaxSumCountAggregator {
     fn min(&self) -> Result<Number> {
         self.inner.lock().map_err(From::from).map(|inner| {
             inner
-                .checkpoint
+                .state
                 .as_ref()
                 .map_or(0u64.into(), |state| state.min.clone())
         })
@@ -48,7 +44,7 @@ impl Max for MinMaxSumCountAggregator {
     fn max(&self) -> Result<Number> {
         self.inner.lock().map_err(From::from).map(|inner| {
             inner
-                .checkpoint
+                .state
                 .as_ref()
                 .map_or(0u64.into(), |state| state.max.clone())
         })
@@ -59,7 +55,7 @@ impl Sum for MinMaxSumCountAggregator {
     fn sum(&self) -> Result<Number> {
         self.inner.lock().map_err(From::from).map(|inner| {
             inner
-                .checkpoint
+                .state
                 .as_ref()
                 .map_or(0u64.into(), |state| state.sum.clone())
         })
@@ -68,12 +64,10 @@ impl Sum for MinMaxSumCountAggregator {
 
 impl Count for MinMaxSumCountAggregator {
     fn count(&self) -> Result<u64> {
-        self.inner.lock().map_err(From::from).map(|inner| {
-            inner
-                .checkpoint
-                .as_ref()
-                .map_or(0u64, |state| state.count.to_u64(&NumberKind::U64))
-        })
+        self.inner
+            .lock()
+            .map_err(From::from)
+            .map(|inner| inner.state.as_ref().map_or(0u64, |state| state.count))
     }
 }
 
@@ -88,55 +82,77 @@ impl Aggregator for MinMaxSumCountAggregator {
     ) -> Result<()> {
         self.inner
             .lock()
-            .map(|mut inner| {
-                let current = &mut inner.current;
-                let kind = descriptor.number_kind();
+            .and_then(|mut inner| {
+                if let Some(state) = &mut inner.state {
+                    let kind = descriptor.number_kind();
 
-                current.count.add(&NumberKind::U64, &1u64.into());
-                current.sum.add(kind, number);
-                if number.partial_cmp(kind, &current.min) == Some(Ordering::Less) {
-                    current.min = number.clone();
+                    state.count = state.count.saturating_add(1);
+                    state.sum.saturating_add(kind, number);
+                    if number.partial_cmp(kind, &state.min) == Some(Ordering::Less) {
+                        state.min = number.clone();
+                    }
+                    if number.partial_cmp(kind, &state.max) == Some(Ordering::Greater) {
+                        state.max = number.clone();
+                    }
+                } else {
+                    inner.state = Some(State {
+                        count: 1,
+                        sum: number.clone(),
+                        min: number.clone(),
+                        max: number.clone(),
+                    })
                 }
-                if number.partial_cmp(kind, &current.max) == Some(Ordering::Greater) {
-                    current.max = number.clone();
-                }
+
+                Ok(())
             })
             .map_err(From::from)
     }
 
-    fn checkpoint(&self, _descriptor: &Descriptor) {
-        let _lock = self.inner.lock().map(|mut inner| {
-            inner.checkpoint = Some(mem::replace(&mut inner.current, State::empty(&self.kind)))
-        });
+    fn synchronized_copy(
+        &self,
+        other: &Arc<dyn Aggregator + Send + Sync>,
+        _descriptor: &Descriptor,
+    ) -> Result<()> {
+        if let Some(other) = other.as_any().downcast_ref::<Self>() {
+            self.inner.lock().map_err(From::from).and_then(|mut inner| {
+                other.inner.lock().map_err(From::from).map(|mut oi| {
+                    oi.state = inner.state.take();
+                })
+            })
+        } else {
+            Err(MetricsError::InconsistentAggregator(format!(
+                "Expected {:?}, got: {:?}",
+                self, other
+            )))
+        }
     }
 
     fn merge(
         &self,
         aggregator: &Arc<dyn Aggregator + Send + Sync>,
-        descriptor: &Descriptor,
+        desc: &Descriptor,
     ) -> Result<()> {
         if let Some(other) = aggregator.as_any().downcast_ref::<Self>() {
             self.inner.lock().map_err(From::from).and_then(|mut inner| {
                 other.inner.lock().map_err(From::from).and_then(|oi| {
-                    match (inner.checkpoint.as_ref(), oi.checkpoint.as_ref()) {
+                    match (inner.state.as_mut(), oi.state.as_ref()) {
                         (None, Some(other_checkpoint)) => {
-                            inner.checkpoint = Some(other_checkpoint.clone());
+                            inner.state = Some(other_checkpoint.clone());
                         }
                         (Some(_), None) | (None, None) => (),
-                        (Some(cp), Some(ocp)) => {
-                            cp.count.add(&NumberKind::U64, &ocp.count);
-                            cp.sum.add(descriptor.number_kind(), &ocp.sum);
+                        (Some(state), Some(other)) => {
+                            state.count = state.count.saturating_add(other.count);
+                            state.sum.saturating_add(desc.number_kind(), &other.sum);
 
-                            if cp.min.partial_cmp(descriptor.number_kind(), &ocp.min)
+                            if state.min.partial_cmp(desc.number_kind(), &other.min)
                                 == Some(Ordering::Greater)
                             {
-                                cp.min.assign(descriptor.number_kind(), &ocp.min);
-                            } else {
+                                state.min.assign(desc.number_kind(), &other.min);
                             }
-                            if cp.max.partial_cmp(descriptor.number_kind(), &ocp.max)
+                            if state.max.partial_cmp(desc.number_kind(), &other.max)
                                 == Some(Ordering::Less)
                             {
-                                cp.max.assign(descriptor.number_kind(), &ocp.max);
+                                state.max.assign(desc.number_kind(), &other.max);
                             }
                         }
                     }
@@ -144,7 +160,7 @@ impl Aggregator for MinMaxSumCountAggregator {
                 })
             })
         } else {
-            Err(MetricsError::InconsistentMergeError(format!(
+            Err(MetricsError::InconsistentAggregator(format!(
                 "Expected {:?}, got: {:?}",
                 self, aggregator
             )))
@@ -156,31 +172,10 @@ impl Aggregator for MinMaxSumCountAggregator {
     }
 }
 
-/// TODO
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct State {
-    count: Number,
+    count: u64,
     sum: Number,
     min: Number,
     max: Number,
-}
-
-impl State {
-    fn empty(kind: &NumberKind) -> Self {
-        State {
-            count: Number::default(),
-            sum: kind.zero(),
-            min: kind.max(),
-            max: kind.min(),
-        }
-    }
-
-    fn clone(&self) -> Self {
-        State {
-            count: self.count.clone(),
-            sum: self.sum.clone(),
-            min: self.min.clone(),
-            max: self.max.clone(),
-        }
-    }
 }

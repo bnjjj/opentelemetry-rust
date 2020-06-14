@@ -7,22 +7,23 @@ use crate::sdk::metrics::export::metrics::Aggregator;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-/// TODO
+/// Create a new histogram for the given descriptor with the given boundaries
 pub fn histogram(desc: &Descriptor, boundaries: &[f64]) -> HistogramAggregator {
     let mut sorted_boundaries = boundaries.to_owned();
     sorted_boundaries.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+    let state = State::empty(&sorted_boundaries);
 
     HistogramAggregator {
         inner: Mutex::new(Inner {
-            current: State::empty(&sorted_boundaries),
-            checkpoint: State::empty(&sorted_boundaries),
             boundaries: sorted_boundaries,
             kind: desc.number_kind().clone(),
+            state,
         }),
     }
 }
 
-/// TODO
+/// This aggregator observes events and counts them in pre-determined buckets. It
+/// also calculates the sum and count of all events.
 #[derive(Debug)]
 pub struct HistogramAggregator {
     inner: Mutex<Inner>,
@@ -30,10 +31,9 @@ pub struct HistogramAggregator {
 
 #[derive(Debug)]
 struct Inner {
-    current: State,
-    checkpoint: State,
     boundaries: Vec<f64>,
     kind: NumberKind,
+    state: State,
 }
 
 #[derive(Debug)]
@@ -58,7 +58,7 @@ impl Sum for HistogramAggregator {
         self.inner
             .lock()
             .map_err(From::from)
-            .map(|inner| inner.checkpoint.sum.clone())
+            .map(|inner| inner.state.sum.clone())
     }
 }
 impl Count for HistogramAggregator {
@@ -66,17 +66,15 @@ impl Count for HistogramAggregator {
         self.inner
             .lock()
             .map_err(From::from)
-            .map(|inner| inner.checkpoint.sum.to_u64(&NumberKind::U64))
+            .map(|inner| inner.state.sum.to_u64(&NumberKind::U64))
     }
 }
 impl Histogram for HistogramAggregator {
     fn histogram(&self) -> Result<Buckets> {
-        self.inner.lock().map_err(From::from).map(|inner| {
-            Buckets::new(
-                inner.boundaries.clone(),
-                inner.checkpoint.bucket_counts.clone(),
-            )
-        })
+        self.inner
+            .lock()
+            .map_err(From::from)
+            .map(|inner| Buckets::new(inner.boundaries.clone(), inner.state.bucket_counts.clone()))
     }
 }
 
@@ -110,47 +108,59 @@ impl Aggregator for HistogramAggregator {
             // 256 and 512 elements, which is a relatively large histogram, so we
             // continue to prefer linear search.
 
-            inner.current.count.add(&NumberKind::U64, &1u64.into());
-            inner.current.sum.add(kind, number);
-            inner.current.bucket_counts[bucket_id] += 1.0;
+            inner
+                .state
+                .count
+                .saturating_add(&NumberKind::U64, &1u64.into());
+            inner.state.sum.saturating_add(kind, number);
+            inner.state.bucket_counts[bucket_id] += 1.0;
 
             Ok(())
         })
     }
 
-    fn checkpoint(&self, _descriptor: &crate::api::metrics::Descriptor) {
-        let _lock = self.inner.lock().map(|mut inner| {
-            let empty = State::empty(&inner.boundaries);
-            inner.checkpoint = mem::replace(&mut inner.current, empty);
-        });
-    }
-
-    fn merge(
+    fn synchronized_copy(
         &self,
         other: &Arc<dyn Aggregator + Send + Sync>,
-        descriptor: &Descriptor,
+        _descriptor: &crate::api::metrics::Descriptor,
     ) -> Result<()> {
+        if let Some(other) = other.as_any().downcast_ref::<Self>() {
+            self.inner.lock().map_err(From::from).and_then(|mut inner| {
+                other.inner.lock().map_err(From::from).map(|mut other| {
+                    let empty = State::empty(&inner.boundaries);
+                    other.state = mem::replace(&mut inner.state, empty)
+                })
+            })
+        } else {
+            Err(MetricsError::InconsistentAggregator(format!(
+                "Expected {:?}, got: {:?}",
+                self, other
+            )))
+        }
+    }
+
+    fn merge(&self, other: &Arc<dyn Aggregator + Send + Sync>, desc: &Descriptor) -> Result<()> {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
             self.inner.lock().map_err(From::from).and_then(|mut inner| {
                 other.inner.lock().map_err(From::from).and_then(|other| {
                     inner
-                        .checkpoint
+                        .state
                         .sum
-                        .add(descriptor.number_kind(), &other.checkpoint.sum);
+                        .saturating_add(desc.number_kind(), &other.state.sum);
                     inner
-                        .checkpoint
+                        .state
                         .count
-                        .add(&NumberKind::U64, &other.checkpoint.count);
+                        .saturating_add(&NumberKind::U64, &other.state.count);
 
-                    for idx in 0..inner.checkpoint.bucket_counts.len() {
-                        inner.checkpoint.bucket_counts[idx] += other.checkpoint.bucket_counts[idx];
+                    for idx in 0..inner.state.bucket_counts.len() {
+                        inner.state.bucket_counts[idx] += other.state.bucket_counts[idx];
                     }
 
                     Ok(())
                 })
             })
         } else {
-            Err(MetricsError::InconsistentMergeError(format!(
+            Err(MetricsError::InconsistentAggregator(format!(
                 "Expected {:?}, got: {:?}",
                 self, other
             )))

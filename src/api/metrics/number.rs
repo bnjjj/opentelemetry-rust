@@ -34,12 +34,12 @@ impl Number {
     }
 
     /// Adds this number to the given other number. Both should be of the same kind.
-    pub fn add(&self, number_kind: &NumberKind, other: &Number) {
+    pub fn saturating_add(&self, number_kind: &NumberKind, other: &Number) {
         match number_kind {
             NumberKind::I64 => loop {
                 let current = self.0.load(Ordering::Acquire);
                 let other = other.0.load(Ordering::Acquire);
-                let new = (current as i64 + other as i64) as u64;
+                let new = (current as i64).saturating_add(other as i64) as u64;
                 let swapped = self.0.compare_and_swap(current, new, Ordering::Release);
                 if swapped == current {
                     return;
@@ -59,7 +59,7 @@ impl Number {
             NumberKind::U64 => loop {
                 let current = self.0.load(Ordering::Acquire);
                 let other = other.0.load(Ordering::Acquire);
-                let new = current + other;
+                let new = current.saturating_add(other);
                 let swapped = self.0.compare_and_swap(current, new, Ordering::Release);
                 if swapped == current {
                     return;
@@ -182,7 +182,7 @@ pub enum NumberKind {
 }
 
 impl NumberKind {
-    /// Returns a zero number
+    /// Returns the zero value for each kind
     pub fn zero(&self) -> Number {
         match self {
             NumberKind::I64 => 0i64.into(),
@@ -191,7 +191,7 @@ impl NumberKind {
         }
     }
 
-    /// TODO
+    /// Returns the max value for each kind
     pub fn max(&self) -> Number {
         match self {
             NumberKind::I64 => i64::MAX.into(),
@@ -200,7 +200,7 @@ impl NumberKind {
         }
     }
 
-    /// TODO
+    /// Returns the min value for each kind
     pub fn min(&self) -> Number {
         match self {
             NumberKind::I64 => i64::MIN.into(),

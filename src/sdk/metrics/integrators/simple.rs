@@ -4,7 +4,7 @@ use crate::api::{
 };
 use crate::sdk::{
     export::metrics::{
-        AggregationSelector, Aggregator, CheckpointSet, Integrator, LockedIntegrator, Record,
+        self, AggregationSelector, Aggregator, CheckpointSet, Integrator, LockedIntegrator, Record,
     },
     Resource,
 };
@@ -122,7 +122,7 @@ struct SimpleIntegratorBatch(HashMap<BatchKey, BatchValue>);
 impl CheckpointSet for SimpleIntegratorBatch {
     fn try_for_each(&mut self, f: &mut dyn FnMut(&Record) -> Result<()>) -> Result<()> {
         self.0.iter().try_for_each(|(_key, value)| {
-            f(&Record::new(
+            f(&metrics::record(
                 &value.descriptor,
                 &value.labels,
                 &value.resource,

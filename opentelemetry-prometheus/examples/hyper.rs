@@ -8,7 +8,10 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
-use opentelemetry::api::{metrics::BoundCounter, KeyValue};
+use opentelemetry::api::{
+    metrics::{BoundCounter, BoundValueRecorder},
+    KeyValue,
+};
 use opentelemetry::global;
 use prometheus::{Counter, Encoder, Gauge, HistogramVec, TextEncoder};
 use std::convert::Infallible;
@@ -67,7 +70,7 @@ fn init_meter() {
 
 struct AppState {
     http_counter: BoundCounter<'static, u64>,
-    // http_body_gauge: SyncInstrument<u64>,
+    http_body_gauge: BoundValueRecorder<'static, u64>,
     // http_req_histogram: SyncInstrument<f64>,
 }
 

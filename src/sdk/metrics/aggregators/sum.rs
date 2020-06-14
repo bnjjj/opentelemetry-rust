@@ -1,5 +1,5 @@
 use crate::api::{
-    metrics::{Descriptor, Number, Result},
+    metrics::{Descriptor, MetricsError, Number, Result},
     Context,
 };
 use crate::sdk::export::metrics::{Aggregator, Sum};
@@ -14,13 +14,12 @@ pub fn sum() -> SumAggregator {
 /// TODO
 #[derive(Debug, Default)]
 pub struct SumAggregator {
-    current: Number,
-    checkpoint: Number,
+    value: Number,
 }
 
 impl Sum for SumAggregator {
     fn sum(&self) -> Result<Number> {
-        Ok(self.checkpoint.clone())
+        Ok(self.value.clone())
     }
 }
 
@@ -31,13 +30,24 @@ impl Aggregator for SumAggregator {
         number: &Number,
         descriptor: &Descriptor,
     ) -> Result<()> {
-        self.current.add(descriptor.number_kind(), number);
+        self.value.saturating_add(descriptor.number_kind(), number);
         Ok(())
     }
-    fn checkpoint(&self, descriptor: &Descriptor) {
-        let kind = descriptor.number_kind();
-        self.checkpoint.assign(kind, &self.current);
-        self.current.assign(kind, &kind.zero());
+    fn synchronized_copy(
+        &self,
+        other: &Arc<dyn Aggregator + Send + Sync>,
+        descriptor: &Descriptor,
+    ) -> Result<()> {
+        if let Some(other) = other.as_any().downcast_ref::<Self>() {
+            let kind = descriptor.number_kind();
+            other.value.assign(kind, &self.value);
+            Ok(())
+        } else {
+            Err(MetricsError::InconsistentAggregator(format!(
+                "Expected {:?}, got: {:?}",
+                self, other
+            )))
+        }
     }
     fn merge(
         &self,
@@ -45,8 +55,8 @@ impl Aggregator for SumAggregator {
         descriptor: &Descriptor,
     ) -> Result<()> {
         if let Some(other_sum) = other.as_any().downcast_ref::<SumAggregator>() {
-            self.checkpoint
-                .add(descriptor.number_kind(), &other_sum.checkpoint)
+            self.value
+                .saturating_add(descriptor.number_kind(), &other_sum.value)
         }
 
         Ok(())

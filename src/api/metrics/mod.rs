@@ -42,25 +42,25 @@ pub type Result<T> = result::Result<T, MetricsError>;
 #[derive(Error, Debug)]
 pub enum MetricsError {
     /// Other errors not covered by specific cases.
-    #[error("metrics error: {0}")]
+    #[error("Metrics error: {0}")]
     Other(String),
     /// Errors when requesting quantiles out of the 0-1 range.
-    #[error("the requested quantile is out of range")]
+    #[error("The requested quantile is out of range")]
     InvalidQuantile,
     /// Errors when recording nan values.
     #[error("NaN value is an invalid input")]
     NaNInput,
     /// Errors when recording negative values in monotonic sums.
-    #[error("negative value is out of range for this instrument")]
+    #[error("Negative value is out of range for this instrument")]
     NegativeInput,
     /// Errors when merging aggregators of incompatible types.
-    #[error("cannot merge {0}, inconsistent aggregator types")]
-    InconsistentMergeError(String),
+    #[error("Inconsistent aggregator types: {0}")]
+    InconsistentAggregator(String),
     /// Errors when interacting with std::io
-    #[error("io error: {0}")]
+    #[error("I/O error: {0}")]
     IO(#[from] io::Error),
     /// Errors when requesting data when no data has been collected
-    #[error("no data collected by this aggregator")]
+    #[error("No data collected by this aggregator")]
     NoDataCollected,
     /// Errors when registering to instruments with the same name and kind
     #[error("A metric was already registered by this name with another kind or number type: {0}")]

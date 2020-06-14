@@ -26,8 +26,12 @@ pub struct Set {
     cached_encodings: Arc<Mutex<CachedEncoders>>,
 }
 
-impl From<&[KeyValue]> for Set {
-    fn from(kvs: &[KeyValue]) -> Self {
+impl<T> From<T> for Set
+where
+    T: AsRef<[KeyValue]>,
+{
+    fn from(kvs: T) -> Self {
+        let kvs = kvs.as_ref();
         if kvs.is_empty() {
             return Set::default();
         }

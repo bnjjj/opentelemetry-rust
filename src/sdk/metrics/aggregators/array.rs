@@ -11,7 +11,7 @@ use std::cmp;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-/// TODO
+/// Create a new default `ArrayAggregator`
 pub fn array() -> ArrayAggregator {
     ArrayAggregator::default()
 }
@@ -24,19 +24,23 @@ pub struct ArrayAggregator {
 
 impl Min for ArrayAggregator {
     fn min(&self) -> Result<Number> {
-        self.inner
-            .lock()
-            .map_err(Into::into)
-            .and_then(|inner| inner.checkpoint.quantile(0.0))
+        self.inner.lock().map_err(Into::into).and_then(|inner| {
+            inner
+                .points
+                .as_ref()
+                .map_or(Ok(0u64.into()), |p| p.quantile(0.0))
+        })
     }
 }
 
 impl Max for ArrayAggregator {
     fn max(&self) -> Result<Number> {
-        self.inner
-            .lock()
-            .map_err(Into::into)
-            .and_then(|inner| inner.checkpoint.quantile(1.0))
+        self.inner.lock().map_err(Into::into).and_then(|inner| {
+            inner
+                .points
+                .as_ref()
+                .map_or(Ok(0u64.into()), |p| p.quantile(1.0))
+        })
     }
 }
 
@@ -45,7 +49,7 @@ impl Sum for ArrayAggregator {
         self.inner
             .lock()
             .map_err(Into::into)
-            .map(|inner| inner.checkpoint_sum.clone())
+            .map(|inner| inner.sum.clone())
     }
 }
 
@@ -54,7 +58,7 @@ impl Count for ArrayAggregator {
         self.inner
             .lock()
             .map_err(Into::into)
-            .map(|inner| inner.checkpoint.len() as u64)
+            .map(|inner| inner.points.as_ref().map_or(0, |p| p.len() as u64))
     }
 }
 
@@ -62,10 +66,12 @@ impl MinMaxSumCount for ArrayAggregator {}
 
 impl Quantile for ArrayAggregator {
     fn quantile(&self, q: f64) -> Result<Number> {
-        self.inner
-            .lock()
-            .map_err(Into::into)
-            .and_then(|inner| inner.checkpoint.quantile(q))
+        self.inner.lock().map_err(Into::into).and_then(|inner| {
+            inner
+                .points
+                .as_ref()
+                .map_or(Ok(0u64.into()), |p| p.quantile(q))
+        })
     }
 }
 
@@ -76,7 +82,7 @@ impl Points for ArrayAggregator {
         self.inner
             .lock()
             .map_err(Into::into)
-            .map(|inner| inner.checkpoint.0.clone())
+            .map(|inner| inner.points.as_ref().map_or_else(Vec::new, |p| p.0.clone()))
     }
 }
 
@@ -85,29 +91,48 @@ impl Aggregator for ArrayAggregator {
         &self,
         _cx: &Context,
         number: &Number,
-        _descriptor: &Descriptor,
+        descriptor: &Descriptor,
     ) -> Result<()> {
-        self.inner
-            .lock()
-            .map_err(Into::into)
-            .map(|mut inner| inner.current.push(number.clone()))
+        self.inner.lock().map_err(Into::into).map(|mut inner| {
+            if let Some(points) = inner.points.as_mut() {
+                points.push(number.clone());
+            } else {
+                inner.points = Some(PointsData::with_number(number.clone()));
+            }
+            inner.sum.saturating_add(descriptor.number_kind(), number)
+        })
     }
-    fn checkpoint(&self, descriptor: &Descriptor) {
-        let _lock = self.inner.lock().map(|mut inner| {
-            inner.checkpoint = mem::take(&mut inner.current);
 
-            inner.checkpoint.sort(descriptor.number_kind());
+    fn synchronized_copy(
+        &self,
+        other: &Arc<dyn Aggregator + Send + Sync>,
+        descriptor: &Descriptor,
+    ) -> Result<()> {
+        if let Some(other) = other.as_any().downcast_ref::<Self>() {
+            other
+                .inner
+                .lock()
+                .map_err(Into::into)
+                .and_then(|mut other| {
+                    self.inner.lock().map_err(Into::into).map(|mut inner| {
+                        other.points = mem::take(&mut inner.points);
+                        other.sum = mem::replace(&mut inner.sum, descriptor.number_kind().zero());
 
-            inner.checkpoint_sum =
-                inner
-                    .checkpoint
-                    .0
-                    .iter()
-                    .fold(NumberKind::U64.zero(), |acc, num| {
-                        acc.add(descriptor.number_kind(), num);
-                        acc
-                    });
-        });
+                        // TODO: This sort should be done lazily, only when quantiles are
+                        // requested. The SDK specification says you can use this aggregator to
+                        // simply list values in the order they were received as an alternative to
+                        // requesting quantile information.
+                        if let Some(points) = &mut other.points {
+                            points.sort(descriptor.number_kind());
+                        }
+                    })
+                })
+        } else {
+            Err(MetricsError::InconsistentAggregator(format!(
+                "Expected {:?}, got: {:?}",
+                self, other
+            )))
+        }
     }
     fn merge(&self, other: &Arc<dyn Aggregator + Send + Sync>, desc: &Descriptor) -> Result<()> {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
@@ -117,17 +142,24 @@ impl Aggregator for ArrayAggregator {
                     .lock()
                     .map_err(From::from)
                     .and_then(|other_inner| {
+                        // Note: Current assumption is that `o` was checkpointed,
+                        // therefore is already sorted.  See the TODO above, since
+                        // this is an open question.
                         inner
-                            .checkpoint_sum
-                            .add(desc.number_kind(), &other_inner.checkpoint_sum);
-                        inner
-                            .checkpoint
-                            .combine(desc.number_kind(), &other_inner.checkpoint);
+                            .sum
+                            .saturating_add(desc.number_kind(), &other_inner.sum);
+                        match (inner.points.as_mut(), other_inner.points.as_ref()) {
+                            (Some(points), Some(other_points)) => {
+                                points.combine(desc.number_kind(), other_points)
+                            }
+                            (None, Some(other_points)) => inner.points = Some(other_points.clone()),
+                            _ => (),
+                        }
                         Ok(())
                     })
             })
         } else {
-            Err(MetricsError::InconsistentMergeError(format!(
+            Err(MetricsError::InconsistentAggregator(format!(
                 "Expected {:?}, got: {:?}",
                 self, other
             )))
@@ -141,16 +173,18 @@ impl Aggregator for ArrayAggregator {
 
 #[derive(Debug, Default)]
 struct Inner {
-    /// checkpoint_sum needs to be aligned for 64-bit atomic operations.
-    checkpoint_sum: Number,
-    current: PointsData,
-    checkpoint: PointsData,
+    sum: Number,
+    points: Option<PointsData>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct PointsData(Vec<Number>);
 
 impl PointsData {
+    fn with_number(number: Number) -> Self {
+        PointsData(vec![number])
+    }
+
     fn len(&self) -> usize {
         self.0.len()
     }
