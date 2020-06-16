@@ -16,7 +16,7 @@ pub fn array() -> ArrayAggregator {
     ArrayAggregator::default()
 }
 
-///TODO
+/// An aggregator which stores metrics in an array.
 #[derive(Debug, Default)]
 pub struct ArrayAggregator {
     inner: Mutex<Inner>,
@@ -134,7 +134,7 @@ impl Aggregator for ArrayAggregator {
             )))
         }
     }
-    fn merge(&self, other: &Arc<dyn Aggregator + Send + Sync>, desc: &Descriptor) -> Result<()> {
+    fn merge(&self, other: &(dyn Aggregator + Send + Sync), desc: &Descriptor) -> Result<()> {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
             self.inner.lock().map_err(Into::into).and_then(|mut inner| {
                 other

@@ -25,7 +25,7 @@ use std::io;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-/// TODO
+/// Create a new stdout exporter builder with the configuration for a stdout exporter.
 pub fn stdout<S, SO, I, IS, ISI>(spawn: S, interval: I) -> StdoutExporterBuilder<io::Stdout, S, I>
 where
     S: Fn(PushControllerWorker) -> SO,
@@ -35,29 +35,40 @@ where
     StdoutExporterBuilder::<io::Stdout, S, I>::builder(spawn, interval)
 }
 
-/// TODO
+///
 #[derive(Debug)]
 pub struct StdoutExporter<W> {
+    /// Writer is the destination. If not set, `Stdout` is used.
     writer: Mutex<W>,
+    /// Will pretty print the output sent to the writer. Default is false.
     pretty_print: bool,
+    /// Suppresses timestamp printing. This is useful to create deterministic test
+    /// conditions.
     do_not_print_time: bool,
+    /// Quantiles are the desired aggregation quantiles for distribution summaries,
+    /// used when the configured aggregator supports quantiles.
+    ///
+    /// Note: this exporter is meant as a demonstration; a real exporter may wish to
+    /// configure quantiles on a per-metric basis.
     quantiles: Vec<f64>,
+    /// Encodes the labels.
     label_encoder: Box<dyn labels::Encoder + Send + Sync>,
+    /// An optional user-defined funtion to format a given export batch.
     formatter: Option<Formatter>,
 }
 
-/// TODO
+/// A collection of exported lines
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[derive(Default, Debug)]
-pub struct ExporterBatch {
+pub struct ExportBatch {
     #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     timestamp: Option<SystemTime>,
-    updates: Vec<ExpoLine>,
+    lines: Vec<ExportLine>,
 }
 
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[derive(Default, Debug)]
-struct ExpoLine {
+struct ExportLine {
     name: String,
     #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     min: Option<ExportNumeric>,
@@ -76,7 +87,7 @@ struct ExpoLine {
     timestamp: Option<SystemTime>,
 }
 
-/// TODO
+/// A number exported as debug for serialization
 pub struct ExportNumeric(Box<dyn fmt::Debug>);
 
 impl fmt::Debug for ExportNumeric {
@@ -108,7 +119,7 @@ where
     W: fmt::Debug + io::Write,
 {
     fn export(&self, checkpoint_set: &mut dyn CheckpointSet) -> Result<()> {
-        let mut batch = ExporterBatch::default();
+        let mut batch = ExportBatch::default();
         if !self.do_not_print_time {
             batch.timestamp = Some(SystemTime::now());
         }
@@ -117,16 +128,17 @@ where
             let agg = record.aggregator();
             let kind = desc.number_kind();
             let encoded_resource = record.resource().encoded(self.label_encoder.as_ref());
-            let mut encoded_inst_labels = String::new();
-            if !desc.instrumentation_name().is_empty() {
+            let encoded_inst_labels = if !desc.instrumentation_name().is_empty() {
                 let inst_labels = labels::Set::from([KeyValue::new(
                     "instrumentation.name",
                     desc.instrumentation_name(),
                 )]);
-                encoded_inst_labels = inst_labels.encoded(Some(self.label_encoder.as_ref()));
-            }
+                inst_labels.encoded(Some(self.label_encoder.as_ref()))
+            } else {
+                String::new()
+            };
 
-            let mut expose = ExpoLine::default();
+            let mut expose = ExportLine::default();
 
             if let Some(array) = agg.as_any().downcast_ref::<ArrayAggregator>() {
                 expose.min = Some(ExportNumeric(array.min()?.to_debug(kind)));
@@ -204,7 +216,7 @@ where
 
             expose.name = sb;
 
-            batch.updates.push(expose);
+            batch.lines.push(expose);
             Ok(())
         })?;
 
@@ -218,15 +230,15 @@ where
     }
 }
 
-/// TODO
-pub struct Formatter(Box<dyn Fn(ExporterBatch) -> Result<String> + Send + Sync>);
+/// A formatter for user-defined batch serilization.
+pub struct Formatter(Box<dyn Fn(ExportBatch) -> Result<String> + Send + Sync>);
 impl fmt::Debug for Formatter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Formatter(closure)")
     }
 }
 
-/// TODO
+/// Configuration for a given stdout exporter.
 #[derive(Debug)]
 pub struct StdoutExporterBuilder<W, S, I> {
     spawn: S,
@@ -262,7 +274,7 @@ where
             formatter: None,
         }
     }
-    /// TODO
+    /// Set the writer that this exporter will use.
     pub fn with_writer<W2: io::Write>(self, writer: W2) -> StdoutExporterBuilder<W2, S, I> {
         StdoutExporterBuilder {
             spawn: self.spawn,
@@ -278,7 +290,7 @@ where
         }
     }
 
-    /// TODO
+    /// Set if the writer should format with pretty print
     pub fn with_pretty_print(self, pretty_print: bool) -> Self {
         StdoutExporterBuilder {
             pretty_print,
@@ -286,7 +298,7 @@ where
         }
     }
 
-    /// TODO
+    /// Hide the timestamps from exported results
     pub fn with_do_not_print_time(self, do_not_print_time: bool) -> Self {
         StdoutExporterBuilder {
             do_not_print_time,
@@ -294,7 +306,7 @@ where
         }
     }
 
-    /// TODO
+    /// Set the quantiles that this exporter will use.
     pub fn with_quantiles(self, quantiles: Vec<f64>) -> Self {
         StdoutExporterBuilder {
             quantiles: Some(quantiles),
@@ -302,7 +314,7 @@ where
         }
     }
 
-    /// TODO
+    /// Set the label encoder that this exporter will use.
     pub fn with_label_encoder<E>(self, label_encoder: E) -> Self
     where
         E: labels::Encoder + Send + Sync + 'static,
@@ -313,7 +325,7 @@ where
         }
     }
 
-    /// TODO
+    /// Set the frequency in which metrics are exported.
     pub fn with_period(self, period: Duration) -> Self {
         StdoutExporterBuilder {
             period: Some(period),
@@ -321,7 +333,7 @@ where
         }
     }
 
-    /// TODO
+    /// Configure the error handler to be used by this pipeline
     pub fn with_error_handler<T>(self, handler: T) -> Self
     where
         T: Fn(MetricsError) + Send + Sync + 'static,
@@ -332,10 +344,10 @@ where
         }
     }
 
-    /// TODO
+    /// Set a formatter for serializing export batch data
     pub fn with_formatter<T>(self, formatter: T) -> Self
     where
-        T: Fn(ExporterBatch) -> Result<String> + Send + Sync + 'static,
+        T: Fn(ExportBatch) -> Result<String> + Send + Sync + 'static,
     {
         StdoutExporterBuilder {
             formatter: Some(Formatter(Box::new(formatter))),
@@ -343,7 +355,7 @@ where
         }
     }
 
-    /// TODO
+    /// Build a new push controller, returning errors if they arise.
     pub fn try_init(mut self) -> metrics::Result<PushController> {
         let period = self.period.take();
         let error_handler = self.error_handler.take();
@@ -363,7 +375,6 @@ where
         Ok(controller)
     }
 
-    /// TODO
     fn try_build(self) -> metrics::Result<(S, I, StdoutExporter<W>)> {
         if let Some(quantiles) = self.quantiles.as_ref() {
             for q in quantiles {

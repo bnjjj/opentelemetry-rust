@@ -88,9 +88,9 @@ impl Resource {
         self.into_iter()
     }
 
-    /// TODO
+    /// Encoded labels
     pub fn encoded(&self, encoder: &dyn labels::Encoder) -> String {
-        // FIXME: convert to label set to avoid this noise
+        // FIXME: convert to label set to avoid this
         encoder.encode(
             &mut self
                 .into_iter()

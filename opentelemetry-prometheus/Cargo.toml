@@ -18,7 +18,7 @@ edition = "2018"
 [dependencies]
 opentelemetry = { version = "0.6.0", path = "..", default-features = false, features = ["metrics"] }
 prometheus = "0.9"
-hyper = "0.13.6"
+protobuf = "2.14"
 
 [dev-dependencies]
 tokio = { version = "0.2", features = ["full"] }

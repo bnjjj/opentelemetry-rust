@@ -1,7 +1,8 @@
 //! OpenTelemetry Labels
 use crate::api::{KeyValue, Value};
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::hash::{Hash, Hasher};
+use std::iter::Peekable;
 use std::sync::{Arc, Mutex};
 
 const MAX_CONCURRENT_ENCODERS: usize = 3;
@@ -26,26 +27,6 @@ pub struct Set {
     cached_encodings: Arc<Mutex<CachedEncoders>>,
 }
 
-impl<T> From<T> for Set
-where
-    T: AsRef<[KeyValue]>,
-{
-    fn from(kvs: T) -> Self {
-        let kvs = kvs.as_ref();
-        if kvs.is_empty() {
-            return Set::default();
-        }
-        let mut inner = kvs.to_vec();
-        inner.sort_by(|a, b| a.key.cmp(&b.key));
-        inner.dedup_by(|a, b| a.key.eq(&b.key));
-
-        Set {
-            equivalent: Distinct(inner),
-            cached_encodings: Arc::new(Mutex::new([None, None, None])),
-        }
-    }
-}
-
 impl Set {
     /// TODO
     pub fn with_equivalent(equivalent: Distinct) -> Self {
@@ -53,6 +34,11 @@ impl Set {
             equivalent,
             cached_encodings: Arc::new(Mutex::new([None, None, None])),
         }
+    }
+
+    /// TODO
+    pub fn len(&self) -> usize {
+        self.equivalent.len()
     }
 
     /// TODO
@@ -112,6 +98,26 @@ impl Set {
     }
 }
 
+impl<T> From<T> for Set
+where
+    T: AsRef<[KeyValue]>,
+{
+    fn from(kvs: T) -> Self {
+        let kvs = kvs.as_ref();
+        if kvs.is_empty() {
+            return Set::default();
+        }
+        let mut inner = kvs.to_vec();
+        inner.sort_by(|a, b| a.key.cmp(&b.key));
+        inner.dedup_by(|a, b| a.key.eq(&b.key));
+
+        Set {
+            equivalent: Distinct(inner),
+            cached_encodings: Arc::new(Mutex::new([None, None, None])),
+        }
+    }
+}
+
 impl<'a> IntoIterator for &'a Set {
     type Item = &'a KeyValue;
     type IntoIter = Iter<'a>;
@@ -141,6 +147,11 @@ impl Distinct {
     /// TODO
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// The length of the set of labels
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -185,6 +196,49 @@ impl Hash for Distinct {
                 Value::String(s) => s.hash(state),
                 Value::Bytes(b) => state.write(b),
             }
+        }
+    }
+}
+
+/// Merge two iterators, yielding sorted results
+pub fn merge_iters<'a, 'b, A: Iterator<Item = &'a KeyValue>, B: Iterator<Item = &'b KeyValue>>(
+    a: A,
+    b: B,
+) -> MergeIter<'a, 'b, A, B> {
+    MergeIter {
+        a: a.peekable(),
+        b: b.peekable(),
+    }
+}
+
+/// TODO
+#[derive(Debug)]
+pub struct MergeIter<'a, 'b, A, B>
+where
+    A: Iterator<Item = &'a KeyValue>,
+    B: Iterator<Item = &'b KeyValue>,
+{
+    a: Peekable<A>,
+    b: Peekable<B>,
+}
+
+impl<'a, A: Iterator<Item = &'a KeyValue>, B: Iterator<Item = &'a KeyValue>> Iterator
+    for MergeIter<'a, 'a, A, B>
+{
+    type Item = &'a KeyValue;
+    fn next(&mut self) -> Option<Self::Item> {
+        let which = match (self.a.peek(), self.b.peek()) {
+            (Some(a), Some(b)) => Some(a.key.cmp(&b.key)),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match which {
+            Some(Ordering::Less) => self.a.next(),
+            Some(Ordering::Equal) => self.a.next(),
+            Some(Ordering::Greater) => self.b.next(),
+            None => None,
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::api::metrics::{registry, Result};
+use crate::api::metrics::{registry, MetricsError, Result};
 use crate::sdk::{
     export::metrics::{AggregationSelector, CheckpointSet, LockedIntegrator, Record},
     metrics::{
@@ -11,12 +11,14 @@ use crate::sdk::{
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-/// TODO
+const DEFAULT_CACHE_DURATION: Duration = Duration::from_secs(10);
+
+/// Returns a builder for creating a `PullController` with the configured and options.
 pub fn pull(selector: Box<dyn AggregationSelector + Send + Sync>) -> PullControllerBuilder {
     PullControllerBuilder::with_selector(selector)
 }
 
-/// TODO
+/// Controller manages access to an `Accumulator` and `Integrator`.  
 #[derive(Debug)]
 pub struct PullController {
     accumulator: Accumulator,
@@ -28,12 +30,12 @@ pub struct PullController {
 }
 
 impl PullController {
-    /// TODO
+    /// The provider for this controller
     pub fn provider(&self) -> registry::RegistryMeterProvider {
         self.provider.clone()
     }
 
-    /// TODO
+    /// Collects all metrics if the last collected at time is past the current period
     pub fn collect(&self) {
         if self
             .last_collect
@@ -65,49 +67,80 @@ impl CheckpointSet for PullController {
     }
 }
 
-/// TODO
+/// Configuration for a `PullController`.
 #[derive(Debug)]
 pub struct PullControllerBuilder {
-    /// TODO
+    /// The selector used by the controller
     selector: Box<dyn AggregationSelector + Send + Sync>,
-    /// Resource is the OpenTelemetry resource associated with all Meters
-    /// created by the Controller.
-    resource: Arc<Resource>,
+    /// Resource is the OpenTelemetry resource associated with all Meters created by
+    /// the controller.
+    resource: Option<Resource>,
 
-    /// Stateful causes the controller to maintain state across
-    /// collection events, so that records in the exported
-    /// checkpoint set are cumulative.
+    /// Stateful causes the controller to maintain state across collection events,
+    /// so that records in the exported checkpoint set are cumulative.
     stateful: bool,
 
-    /// CachePeriod is the period which a recently-computed result
-    /// will be returned without gathering metric data again.
+    /// CachePeriod is the period which a recently-computed result will be returned
+    /// without gathering metric data again.
     ///
-    /// If the period is zero, caching of the result is disabled.
-    /// The default value is 10 seconds.
-    cache_period: Duration,
+    /// If the period is zero, caching of the result is disabled. The default value
+    /// is 10 seconds.
+    cache_period: Option<Duration>,
 
     /// Error handler to use for this controller
     error_handler: Option<ErrorHandler>,
 }
 
 impl PullControllerBuilder {
-    /// TODO
+    /// Configure the sector for this controller
     pub fn with_selector(selector: Box<dyn AggregationSelector + Send + Sync>) -> Self {
         PullControllerBuilder {
             selector,
-            resource: Arc::new(Resource::default()),
+            resource: None,
             stateful: false,
-            cache_period: Duration::from_secs(10),
+            cache_period: None,
             error_handler: None,
         }
     }
 
-    /// TODO
+    /// Configure the resource for this controller
+    pub fn with_resource(self, resource: Resource) -> Self {
+        PullControllerBuilder {
+            resource: Some(resource),
+            ..self
+        }
+    }
+
+    /// Configure the cache period for this controller
+    pub fn with_cache_period(self, period: Duration) -> Self {
+        PullControllerBuilder {
+            cache_period: Some(period),
+            ..self
+        }
+    }
+
+    /// Configure the statefulness of this controller
+    pub fn with_stateful(self, stateful: bool) -> Self {
+        PullControllerBuilder { stateful, ..self }
+    }
+
+    /// Configure the error handler this controller will use
+    pub fn with_error_handler<T>(self, f: T) -> Self
+    where
+        T: Fn(MetricsError) + Send + Sync + 'static,
+    {
+        PullControllerBuilder {
+            error_handler: Some(ErrorHandler::new(f)),
+            ..self
+        }
+    }
+
+    /// Build a new `PushController` from the current configuration.
     pub fn build(self) -> PullController {
         let integrator = Arc::new(integrators::simple(self.selector, self.stateful));
 
         let accumulator = accumulator(integrator.clone())
-            .with_resource(self.resource)
+            .with_resource(self.resource.unwrap_or_default())
             .build();
         let provider = registry::meter_provider(Arc::new(accumulator.clone()));
 
@@ -115,7 +148,7 @@ impl PullControllerBuilder {
             accumulator,
             integrator,
             provider,
-            period: self.cache_period,
+            period: self.cache_period.unwrap_or(DEFAULT_CACHE_DURATION),
             last_collect: SystemTime::now(),
             error_handler: self.error_handler,
         }

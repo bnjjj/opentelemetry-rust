@@ -5,7 +5,10 @@
 //! to have minimal resource utilization and runtime impact.
 use crate::api::{
     metrics::{
-        sdk_api::{AsyncInstrument, Instrument, MeterCore, SyncBoundInstrument, SyncInstrument},
+        sdk_api::{
+            AsyncInstrumentCore, InstrumentCore, MeterCore, SyncBoundInstrumentCore,
+            SyncInstrumentCore,
+        },
         AsyncRunner, Descriptor, InstrumentKind, Measurement, Meter, MeterProvider, Number,
         NumberKind, Result,
     },
@@ -35,7 +38,7 @@ impl MeterCore for NoopMeterCore {
     fn new_sync_instrument(
         &self,
         _descriptor: Descriptor,
-    ) -> Result<Arc<dyn SyncInstrument + Send + Sync>> {
+    ) -> Result<Arc<dyn SyncInstrumentCore + Send + Sync>> {
         Ok(Arc::new(NoopSyncInstrument))
     }
 
@@ -43,7 +46,7 @@ impl MeterCore for NoopMeterCore {
         &self,
         _descriptor: Descriptor,
         _runner: AsyncRunner,
-    ) -> Result<Arc<dyn AsyncInstrument + Send + Sync>> {
+    ) -> Result<Arc<dyn AsyncInstrumentCore + Send + Sync>> {
         Ok(Arc::new(NoopAsyncInstrument))
     }
 
@@ -57,21 +60,21 @@ impl MeterCore for NoopMeterCore {
     }
 }
 
-/// TODO
+/// A no-op sync instrument
 #[derive(Debug)]
 pub struct NoopSyncInstrument;
 
-impl Instrument for NoopSyncInstrument {
+impl InstrumentCore for NoopSyncInstrument {
     fn descriptor(&self) -> &Descriptor {
         &NOOP_DESCRIPTOR
     }
 }
 
-impl SyncInstrument for NoopSyncInstrument {
+impl SyncInstrumentCore for NoopSyncInstrument {
     fn bind<'a>(
         &self,
         _labels: &'a [crate::api::KeyValue],
-    ) -> Arc<dyn SyncBoundInstrument + Send + Sync> {
+    ) -> Arc<dyn SyncBoundInstrumentCore + Send + Sync> {
         Arc::new(NoopBoundSyncInstrument)
     }
     fn record_one_with_context<'a>(
@@ -87,27 +90,27 @@ impl SyncInstrument for NoopSyncInstrument {
     }
 }
 
-/// TODO
+/// A no-op bound sync instrument
 #[derive(Debug)]
 pub struct NoopBoundSyncInstrument;
 
-impl SyncBoundInstrument for NoopBoundSyncInstrument {
+impl SyncBoundInstrumentCore for NoopBoundSyncInstrument {
     fn record_one_with_context<'a>(&self, _cx: &Context, _number: Number) {
         // Ignored
     }
 }
 
-/// TODO
+/// A no-op async instrument.
 #[derive(Debug)]
 pub struct NoopAsyncInstrument;
 
-impl Instrument for NoopAsyncInstrument {
+impl InstrumentCore for NoopAsyncInstrument {
     fn descriptor(&self) -> &Descriptor {
         &NOOP_DESCRIPTOR
     }
 }
 
-impl AsyncInstrument for NoopAsyncInstrument {
+impl AsyncInstrumentCore for NoopAsyncInstrument {
     fn as_any(&self) -> &dyn Any {
         self
     }

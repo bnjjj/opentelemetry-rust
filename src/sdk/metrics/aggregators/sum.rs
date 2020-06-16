@@ -6,12 +6,12 @@ use crate::sdk::export::metrics::{Aggregator, Sum};
 use std::any::Any;
 use std::sync::Arc;
 
-/// TODO
+/// Create a new sum aggregator.
 pub fn sum() -> SumAggregator {
     SumAggregator::default()
 }
 
-/// TODO
+/// An aggregator for counter events.
 #[derive(Debug, Default)]
 pub struct SumAggregator {
     value: Number,
@@ -49,11 +49,7 @@ impl Aggregator for SumAggregator {
             )))
         }
     }
-    fn merge(
-        &self,
-        other: &Arc<dyn Aggregator + Send + Sync>,
-        descriptor: &Descriptor,
-    ) -> Result<()> {
+    fn merge(&self, other: &(dyn Aggregator + Send + Sync), descriptor: &Descriptor) -> Result<()> {
         if let Some(other_sum) = other.as_any().downcast_ref::<SumAggregator>() {
             self.value
                 .saturating_add(descriptor.number_kind(), &other_sum.value)

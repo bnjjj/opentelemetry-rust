@@ -17,7 +17,7 @@ lazy_static::lazy_static! {
     static ref DEFAULT_PUSH_PERIOD: time::Duration = time::Duration::from_secs(10);
 }
 
-/// TODO
+/// Create a new `PushControllerBuilder`.
 pub fn push<S, E, SP, SO, I, IO>(
     selector: S,
     exporter: E,
@@ -43,7 +43,7 @@ where
     }
 }
 
-/// TODO
+/// Organizes a periodic push of metric data.
 #[derive(Debug)]
 pub struct PushController {
     message_sender: Mutex<mpsc::Sender<PushMessage>>,
@@ -56,7 +56,8 @@ enum PushMessage {
     Shutdown,
 }
 
-///TODO
+/// The future which executes push controller work periodically. Can be run on a
+/// passed in executor.
 #[allow(missing_debug_implementations)]
 pub struct PushControllerWorker {
     messages: Pin<Box<dyn Stream<Item = PushMessage> + Send>>,
@@ -109,7 +110,7 @@ impl Drop for PushControllerWorker {
 }
 
 impl PushController {
-    /// TODO
+    /// The controller's meter provider.
     pub fn provider(&self) -> registry::RegistryMeterProvider {
         self.provider.clone()
     }
@@ -123,7 +124,7 @@ impl Drop for PushController {
     }
 }
 
-/// TODO
+/// Configuration for building a new `PushController`.
 #[derive(Debug)]
 pub struct PushControllerBuilder<S, I> {
     selector: Box<dyn AggregationSelector + Send + Sync>,
@@ -131,7 +132,7 @@ pub struct PushControllerBuilder<S, I> {
     spawn: S,
     interval: I,
     error_handler: Option<ErrorHandler>,
-    resource: Option<Arc<Resource>>,
+    resource: Option<Resource>,
     stateful: Option<bool>,
     period: Option<time::Duration>,
     timeout: Option<time::Duration>,
@@ -143,7 +144,7 @@ where
     I: Fn(time::Duration) -> IS,
     IS: Stream<Item = ISI> + Send + 'static,
 {
-    /// TODO
+    /// Configure the statefulness of this controller.
     pub fn with_stateful(self, stateful: bool) -> Self {
         PushControllerBuilder {
             stateful: Some(stateful),
@@ -151,7 +152,7 @@ where
         }
     }
 
-    /// TODO
+    /// Configure the period of this controller
     pub fn with_period(self, period: time::Duration) -> Self {
         PushControllerBuilder {
             period: Some(period),
@@ -159,7 +160,7 @@ where
         }
     }
 
-    /// TODO
+    /// Configure the error handler this controller will use.
     pub fn with_error_handler(self, error_handler: ErrorHandler) -> Self {
         PushControllerBuilder {
             error_handler: Some(error_handler),
@@ -167,7 +168,15 @@ where
         }
     }
 
-    /// TODO
+    /// Configure the resource used by this controller
+    pub fn with_resource(self, resource: Resource) -> Self {
+        PushControllerBuilder {
+            resource: Some(resource),
+            ..self
+        }
+    }
+
+    /// Build a new `PushController` with this configuration.
     pub fn build(self) -> PushController {
         let integrator = integrators::simple(self.selector, self.stateful.unwrap_or(false));
         let integrator = Arc::new(integrator);

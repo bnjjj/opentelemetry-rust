@@ -6,7 +6,10 @@ lazy_static::lazy_static! {
     static ref GLOBAL_METER_PROVIDER: RwLock<GlobalMeterProvider> = RwLock::new(GlobalMeterProvider::new(metrics::noop::NoopMeterProvider));
 }
 
-/// TODO
+/// Represents the globally configured [`MeterProvider`] instance for this
+/// application.
+///
+/// [`MeterProvider`]: ../../api/metrics/meter/trait.MeterProvider.html
 #[derive(Debug, Clone)]
 pub struct GlobalMeterProvider {
     provider: Arc<dyn MeterProvider + Send + Sync>,
@@ -19,7 +22,7 @@ impl MeterProvider for GlobalMeterProvider {
 }
 
 impl GlobalMeterProvider {
-    /// TODO
+    /// Create a new global meter provider
     pub fn new<P>(provider: P) -> Self
     where
         P: MeterProvider + Send + Sync + 'static,
@@ -30,7 +33,10 @@ impl GlobalMeterProvider {
     }
 }
 
-/// TODO
+/// Sets the given [`MeterProvider`] instance as the current global meter
+/// provider.
+///
+/// [`MeterProvider`]: ../../api/metrics/meter/trait.MeterProvider.html
 pub fn set_meter_provider<P>(new_provider: P)
 where
     P: metrics::MeterProvider + Send + Sync + 'static,
@@ -41,7 +47,11 @@ where
     *global_provider = GlobalMeterProvider::new(new_provider);
 }
 
-/// TODO
+/// Returns an instance of the currently configured global [`MeterProvider`]
+/// through [`GlobalMeterProvider`].
+///
+/// [`MeterProvider`]: ../../api/metrics/meter/trait.MeterProvider.html
+/// [`GlobalMeterProvider`]: struct.GlobalMeterProvider.html
 pub fn meter_provider() -> GlobalMeterProvider {
     GLOBAL_METER_PROVIDER
         .read()
@@ -49,7 +59,14 @@ pub fn meter_provider() -> GlobalMeterProvider {
         .clone()
 }
 
-/// TODO
+/// Creates a named [`Meter`] via the configured [`GlobalMeterProvider`].
+///
+/// If the name is an empty string, the provider will use a default name.
+///
+/// This is a more convenient way of expressing `global::meter_provider().meter(name)`.
+///
+/// [`Meter`]: ../../api/metrics/meter/struct.Meter.html
+/// [`GlobalMeterProvider`]: struct.GlobalMeterProvider.html
 pub fn meter(name: &str) -> Meter {
     meter_provider().meter(name)
 }

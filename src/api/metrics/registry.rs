@@ -1,7 +1,7 @@
 //! Metrics Registry API
 use crate::api::{
     metrics::{
-        sdk_api::{AsyncInstrument, MeterCore, SyncInstrument},
+        sdk_api::{AsyncInstrumentCore, MeterCore, SyncInstrumentCore},
         Meter, MeterProvider,
     },
     metrics::{AsyncRunner, Descriptor, Measurement, MetricsError, Result},
@@ -10,12 +10,12 @@ use crate::api::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// TODO
+/// Create a new `RegistryMeterProvider` from a `MeterCore`.
 pub fn meter_provider(core: Arc<dyn MeterCore + Send + Sync>) -> RegistryMeterProvider {
     RegistryMeterProvider(Arc::new(UniqueInstrumentMeterCore::wrap(core)))
 }
 
-/// TODO
+/// A standard `MeterProvider` for wrapping a `MeterCore`.
 #[derive(Debug, Clone)]
 pub struct RegistryMeterProvider(Arc<dyn MeterCore + Send + Sync>);
 
@@ -161,5 +161,5 @@ impl From<&Descriptor> for UniqueInstrumentKey {
     }
 }
 
-type UniqueSyncInstrument = Arc<dyn SyncInstrument + Send + Sync>;
-type UniqueAsyncInstrument = Arc<dyn AsyncInstrument + Send + Sync>;
+type UniqueSyncInstrument = Arc<dyn SyncInstrumentCore + Send + Sync>;
+type UniqueAsyncInstrument = Arc<dyn AsyncInstrumentCore + Send + Sync>;

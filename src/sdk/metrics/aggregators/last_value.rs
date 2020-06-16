@@ -54,7 +54,7 @@ impl Aggregator for LastValueAggregator {
     }
     fn merge(
         &self,
-        other: &Arc<dyn Aggregator + Send + Sync>,
+        other: &(dyn Aggregator + Send + Sync),
         _descriptor: &Descriptor,
     ) -> Result<()> {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {

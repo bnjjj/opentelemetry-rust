@@ -13,7 +13,7 @@ use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// TODO
+/// Create a new simple integrator
 pub fn simple(
     selector: Box<dyn AggregationSelector + Send + Sync>,
     stateful: bool,
@@ -25,7 +25,7 @@ pub fn simple(
     }
 }
 
-/// TODO
+/// Simple metric integration strategy
 #[derive(Debug)]
 pub struct SimpleIntegrator {
     aggregation_selector: Box<dyn AggregationSelector + Send + Sync>,
@@ -34,7 +34,7 @@ pub struct SimpleIntegrator {
 }
 
 impl SimpleIntegrator {
-    /// TODO
+    /// Lock this integrator to return a mutable locked integrator
     pub fn lock(&self) -> Result<SimpleLockedIntegrator<'_>> {
         self.batch
             .lock()
@@ -52,7 +52,7 @@ impl Integrator for SimpleIntegrator {
     }
 }
 
-///TODO
+/// A locked representation of the integrator used where mutable references are necessary.
 #[derive(Debug)]
 pub struct SimpleLockedIntegrator<'a> {
     parent: &'a SimpleIntegrator,
@@ -76,18 +76,25 @@ impl<'a> LockedIntegrator for SimpleLockedIntegrator<'a> {
             // stateless Integrator because such identical records
             // may arise in the Meter implementation due to race
             // conditions.
-            return value.aggregator.merge(agg, desc);
+            if self.parent.stateful {
+                return value.aggregator.merge(agg.as_ref(), desc);
+            } else {
+                // FIXME: consider deadlock case for stateless aggregator merging
+                // without cloning below.
+                return Ok(());
+            }
         }
         // If this integrator is stateful, create a copy of the
         // Aggregator for long-term storage.  Otherwise the
         // Meter implementation will checkpoint the aggregator
         // again, overwriting the long-lived state.
+
         if self.parent.stateful {
             // Note: the call to AggregatorFor() followed by Merge
             // is effectively a Clone() operation.
             new_agg = self.parent.aggregation_selector().aggregator_for(desc);
             if let Some(new_agg) = new_agg.as_ref() {
-                new_agg.merge(agg, desc)?;
+                new_agg.merge(agg.as_ref(), desc)?;
             }
         }
 
@@ -132,11 +139,9 @@ impl CheckpointSet for SimpleIntegratorBatch {
     }
 }
 
-/// TODO
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct BatchKey(u64);
 
-/// TODO
 #[derive(Debug)]
 struct BatchValue {
     aggregator: Arc<dyn Aggregator + Send + Sync>,

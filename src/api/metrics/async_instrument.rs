@@ -13,12 +13,12 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Observation {
     number: Number,
-    instrument: Arc<dyn sdk_api::AsyncInstrument>,
+    instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
 }
 
 impl Observation {
     /// Create a new observation for an instrument
-    pub(crate) fn new(number: Number, instrument: Arc<dyn sdk_api::AsyncInstrument>) -> Self {
+    pub(crate) fn new(number: Number, instrument: Arc<dyn sdk_api::AsyncInstrumentCore>) -> Self {
         Observation { number, instrument }
     }
 
@@ -27,7 +27,7 @@ impl Observation {
         &self.number
     }
     /// The instrument used to record this observation
-    pub fn instrument(&self) -> &Arc<dyn sdk_api::AsyncInstrument> {
+    pub fn instrument(&self) -> &Arc<dyn sdk_api::AsyncInstrumentCore> {
         &self.instrument
     }
 }
@@ -48,7 +48,7 @@ pub type BatchObserverCallback = Box<dyn Fn(BatchObserverResult) + Send + Sync>;
 /// Data passed to an observer callback to capture observations for one
 /// asynchronous metric instrument.
 pub struct ObserverResult<T> {
-    instrument: Arc<dyn sdk_api::AsyncInstrument>,
+    instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
     f: fn(&[KeyValue], &[Observation]),
     _marker: marker::PhantomData<T>,
 }
@@ -59,7 +59,7 @@ where
 {
     /// New observer result for a given metric instrument
     fn new(
-        instrument: Arc<dyn sdk_api::AsyncInstrument>,
+        instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
         f: fn(&[KeyValue], &[Observation]),
     ) -> Self {
         ObserverResult {
@@ -137,7 +137,7 @@ impl AsyncRunner {
     /// implementation can be used for batch runners.)
     pub fn run(
         &self,
-        instrument: Arc<dyn sdk_api::AsyncInstrument>,
+        instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
         f: fn(&[KeyValue], &[Observation]),
     ) {
         match self {

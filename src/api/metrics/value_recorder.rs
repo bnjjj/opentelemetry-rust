@@ -23,6 +23,16 @@ where
         }
     }
 
+    /// Record a new metric value
+    pub fn record(&self, value: T, labels: &[KeyValue]) {
+        self.record_with_context(&Context::current(), value, labels)
+    }
+
+    /// Record a new metric value with context
+    pub fn record_with_context(&self, _cx: &Context, value: T, labels: &[KeyValue]) {
+        self.0.direct_record(value.into(), labels)
+    }
+
     /// Creates a `Measurement` object to use with batch recording.
     pub fn measurement(&self, value: T) -> Measurement {
         Measurement::new(value.into(), self.0.instrument().clone())

@@ -21,18 +21,19 @@ pub trait MeterProvider: fmt::Debug {
     fn meter(&self, instrumentation_name: &str) -> Meter;
 }
 
-/// TODO
+/// Meter is the OpenTelemetry metric API, based on a sdk-defined `MeterCore`
+/// implementation and the `Meter` library name.
 #[derive(Debug)]
 pub struct Meter {
     pub(crate) instrumentation_name: String,
-    pub(crate) core: Arc<dyn sdk_api::MeterCore>,
+    pub(crate) core: Arc<dyn sdk_api::MeterCore + Send + Sync>,
 }
 
 impl Meter {
     /// Create a new named meter from a sdk implemented core
     pub fn new<T: Into<String>>(
         instrumentation_name: T,
-        core: Arc<dyn sdk_api::MeterCore>,
+        core: Arc<dyn sdk_api::MeterCore + Send + Sync>,
     ) -> Self {
         Meter {
             instrumentation_name: instrumentation_name.into(),
@@ -238,7 +239,7 @@ impl Meter {
     pub(crate) fn new_sync_instrument(
         &self,
         descriptor: Descriptor,
-    ) -> Result<Arc<dyn sdk_api::SyncInstrument + Send + Sync>> {
+    ) -> Result<Arc<dyn sdk_api::SyncInstrumentCore + Send + Sync>> {
         self.core.new_sync_instrument(descriptor)
     }
 
@@ -246,7 +247,7 @@ impl Meter {
         &self,
         descriptor: Descriptor,
         runner: AsyncRunner,
-    ) -> Result<Arc<dyn sdk_api::AsyncInstrument + Send + Sync>> {
+    ) -> Result<Arc<dyn sdk_api::AsyncInstrumentCore + Send + Sync>> {
         self.core.new_async_instrument(descriptor, runner)
     }
 }

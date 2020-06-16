@@ -4,44 +4,44 @@ use std::time::SystemTime;
 
 /// Sum returns an aggregated sum.
 pub trait Sum {
-    ///TODO
+    /// The sum of the currently aggregated metrics
     fn sum(&self) -> Result<Number>;
 }
 
 /// Count returns the number of values that were aggregated.
 pub trait Count {
-    ///TODO
+    /// The count of the currently aggregated metrics
     fn count(&self) -> Result<u64>;
 }
 
 /// Min returns the minimum value over the set of values that were aggregated.
 pub trait Min {
-    /// TODO
+    /// The min of the currently aggregated metrics
     fn min(&self) -> Result<Number>;
 }
 
 /// Max returns the maximum value over the set of values that were aggregated.
 pub trait Max {
-    /// TODO
+    /// The max of the currently aggregated metrics
     fn max(&self) -> Result<Number>;
 }
 
 /// Quantile returns an exact or estimated quantile over the
 /// set of values that were aggregated.
 pub trait Quantile {
-    /// TODO
+    /// The quantile of the currently aggregated metrics
     fn quantile(&self, q: f64) -> Result<Number>;
 }
 
 /// LastValue returns the latest value that was aggregated.
 pub trait LastValue {
-    /// TODO
+    /// The last value of the currently aggregated metrics
     fn last_value(&self) -> Result<(Number, SystemTime)>;
 }
 
 /// Points returns the raw set of values that were aggregated.
 pub trait Points {
-    /// TODO
+    /// The raw set of points currently aggregated
     fn points(&self) -> Result<Vec<Number>>;
 }
 
@@ -66,11 +66,21 @@ impl Buckets {
     pub fn new(boundaries: Vec<f64>, counts: Vec<f64>) -> Self {
         Buckets { boundaries, counts }
     }
+
+    /// Boundaries of the histogram buckets
+    pub fn boundaries(&self) -> &Vec<f64> {
+        &self.boundaries
+    }
+
+    /// Counts of the histogram buckets
+    pub fn counts(&self) -> &Vec<f64> {
+        &self.counts
+    }
 }
 
 /// Histogram returns the count of events in pre-determined buckets.
 pub trait Histogram: Sum {
-    /// TODO
+    /// Buckets for this histogram.
     fn histogram(&self) -> Result<Buckets>;
 }
 

@@ -5,7 +5,7 @@ use crate::api::{
 use crate::sdk::export::metrics::{Buckets, Count, Histogram, Sum};
 use crate::sdk::metrics::export::metrics::Aggregator;
 use std::mem;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// Create a new histogram for the given descriptor with the given boundaries
 pub fn histogram(desc: &Descriptor, boundaries: &[f64]) -> HistogramAggregator {
@@ -14,7 +14,7 @@ pub fn histogram(desc: &Descriptor, boundaries: &[f64]) -> HistogramAggregator {
     let state = State::empty(&sorted_boundaries);
 
     HistogramAggregator {
-        inner: Mutex::new(Inner {
+        inner: RwLock::new(Inner {
             boundaries: sorted_boundaries,
             kind: desc.number_kind().clone(),
             state,
@@ -26,7 +26,7 @@ pub fn histogram(desc: &Descriptor, boundaries: &[f64]) -> HistogramAggregator {
 /// also calculates the sum and count of all events.
 #[derive(Debug)]
 pub struct HistogramAggregator {
-    inner: Mutex<Inner>,
+    inner: RwLock<Inner>,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ struct State {
 impl State {
     fn empty(boundaries: &[f64]) -> Self {
         State {
-            bucket_counts: Vec::with_capacity(boundaries.len() + 1),
+            bucket_counts: vec![0.0; boundaries.len() + 1],
             count: NumberKind::U64.zero(),
             sum: NumberKind::U64.zero(),
         }
@@ -56,7 +56,7 @@ impl State {
 impl Sum for HistogramAggregator {
     fn sum(&self) -> Result<Number> {
         self.inner
-            .lock()
+            .read()
             .map_err(From::from)
             .map(|inner| inner.state.sum.clone())
     }
@@ -64,7 +64,7 @@ impl Sum for HistogramAggregator {
 impl Count for HistogramAggregator {
     fn count(&self) -> Result<u64> {
         self.inner
-            .lock()
+            .read()
             .map_err(From::from)
             .map(|inner| inner.state.sum.to_u64(&NumberKind::U64))
     }
@@ -72,7 +72,7 @@ impl Count for HistogramAggregator {
 impl Histogram for HistogramAggregator {
     fn histogram(&self) -> Result<Buckets> {
         self.inner
-            .lock()
+            .read()
             .map_err(From::from)
             .map(|inner| Buckets::new(inner.boundaries.clone(), inner.state.bucket_counts.clone()))
     }
@@ -85,38 +85,40 @@ impl Aggregator for HistogramAggregator {
         number: &Number,
         descriptor: &Descriptor,
     ) -> Result<()> {
-        self.inner.lock().map_err(From::from).and_then(|mut inner| {
-            let kind = descriptor.number_kind();
-            let as_float = number.to_f64(kind);
+        self.inner
+            .write()
+            .map_err(From::from)
+            .and_then(|mut inner| {
+                let kind = descriptor.number_kind();
+                let as_float = number.to_f64(kind);
 
-            let mut bucket_id = inner.boundaries.len();
-            for (idx, boundary) in inner.boundaries.iter().enumerate() {
-                if as_float < *boundary {
-                    bucket_id = idx;
-                    break;
+                let mut bucket_id = inner.boundaries.len();
+                for (idx, boundary) in inner.boundaries.iter().enumerate() {
+                    if as_float < *boundary {
+                        bucket_id = idx;
+                        break;
+                    }
                 }
-            }
-            // Note: Binary-search was compared using the benchmarks. The following
-            // code is equivalent to the linear search above:
-            //
-            //     bucketID := sort.Search(len(c.boundaries), func(i int) bool {
-            //         return asFloat < c.boundaries[i]
-            //     })
-            //
-            // The binary search wins for very large boundary sets, but
-            // the linear search performs better up through arrays between
-            // 256 and 512 elements, which is a relatively large histogram, so we
-            // continue to prefer linear search.
+                // Note: Binary-search was compared using the benchmarks. The following
+                // code is equivalent to the linear search above:
+                //
+                //     bucketID := sort.Search(len(c.boundaries), func(i int) bool {
+                //         return asFloat < c.boundaries[i]
+                //     })
+                //
+                // The binary search wins for very large boundary sets, but
+                // the linear search performs better up through arrays between
+                // 256 and 512 elements, which is a relatively large histogram, so we
+                // continue to prefer linear search.
 
-            inner
-                .state
-                .count
-                .saturating_add(&NumberKind::U64, &1u64.into());
-            inner.state.sum.saturating_add(kind, number);
-            inner.state.bucket_counts[bucket_id] += 1.0;
-
-            Ok(())
-        })
+                inner
+                    .state
+                    .count
+                    .saturating_add(&NumberKind::U64, &1u64.into());
+                inner.state.sum.saturating_add(kind, number);
+                inner.state.bucket_counts[bucket_id] += 1.0;
+                Ok(())
+            })
     }
 
     fn synchronized_copy(
@@ -125,12 +127,15 @@ impl Aggregator for HistogramAggregator {
         _descriptor: &crate::api::metrics::Descriptor,
     ) -> Result<()> {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            self.inner.lock().map_err(From::from).and_then(|mut inner| {
-                other.inner.lock().map_err(From::from).map(|mut other| {
-                    let empty = State::empty(&inner.boundaries);
-                    other.state = mem::replace(&mut inner.state, empty)
+            self.inner
+                .write()
+                .map_err(From::from)
+                .and_then(|mut inner| {
+                    other.inner.write().map_err(From::from).map(|mut other| {
+                        let empty = State::empty(&inner.boundaries);
+                        other.state = mem::replace(&mut inner.state, empty)
+                    })
                 })
-            })
         } else {
             Err(MetricsError::InconsistentAggregator(format!(
                 "Expected {:?}, got: {:?}",
@@ -139,26 +144,29 @@ impl Aggregator for HistogramAggregator {
         }
     }
 
-    fn merge(&self, other: &Arc<dyn Aggregator + Send + Sync>, desc: &Descriptor) -> Result<()> {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            self.inner.lock().map_err(From::from).and_then(|mut inner| {
-                other.inner.lock().map_err(From::from).and_then(|other| {
-                    inner
-                        .state
-                        .sum
-                        .saturating_add(desc.number_kind(), &other.state.sum);
-                    inner
-                        .state
-                        .count
-                        .saturating_add(&NumberKind::U64, &other.state.count);
+    fn merge(&self, other: &(dyn Aggregator + Send + Sync), desc: &Descriptor) -> Result<()> {
+        if let Some(other) = other.as_any().downcast_ref::<HistogramAggregator>() {
+            self.inner
+                .write()
+                .map_err(From::from)
+                .and_then(|mut inner| {
+                    other.inner.read().map_err(From::from).and_then(|other| {
+                        inner
+                            .state
+                            .sum
+                            .saturating_add(desc.number_kind(), &other.state.sum);
+                        inner
+                            .state
+                            .count
+                            .saturating_add(&NumberKind::U64, &other.state.count);
 
-                    for idx in 0..inner.state.bucket_counts.len() {
-                        inner.state.bucket_counts[idx] += other.state.bucket_counts[idx];
-                    }
+                        for idx in 0..inner.state.bucket_counts.len() {
+                            inner.state.bucket_counts[idx] += other.state.bucket_counts[idx];
+                        }
 
-                    Ok(())
+                        Ok(())
+                    })
                 })
-            })
         } else {
             Err(MetricsError::InconsistentAggregator(format!(
                 "Expected {:?}, got: {:?}",

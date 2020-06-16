@@ -20,7 +20,7 @@ impl<'a> BatchObserver<'a> {
 /// A metric that captures a precomputed sum of values at a point in time.
 #[derive(Debug)]
 pub struct SumObserver<T> {
-    instrument: Arc<dyn sdk_api::AsyncInstrument>,
+    instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -106,7 +106,7 @@ impl<'a, T> SumObserverBuilder<'a, T> {
 /// in time.
 #[derive(Debug)]
 pub struct UpDownSumObserver<T> {
-    instrument: Arc<dyn sdk_api::AsyncInstrument>,
+    instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -191,7 +191,7 @@ impl<'a, T> UpDownSumObserverBuilder<'a, T> {
 /// A metric that captures a set of values at a point in time.
 #[derive(Debug)]
 pub struct ValueObserver<T> {
-    instrument: Arc<dyn sdk_api::AsyncInstrument>,
+    instrument: Arc<dyn sdk_api::AsyncInstrumentCore>,
     _marker: std::marker::PhantomData<T>,
 }
 

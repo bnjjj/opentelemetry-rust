@@ -11,12 +11,12 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Measurement {
     number: Number,
-    instrument: Arc<dyn sdk_api::SyncInstrument>,
+    instrument: Arc<dyn sdk_api::SyncInstrumentCore>,
 }
 
 impl Measurement {
     /// Create a new measurement for an instrument
-    pub(crate) fn new(number: Number, instrument: Arc<dyn sdk_api::SyncInstrument>) -> Self {
+    pub(crate) fn new(number: Number, instrument: Arc<dyn sdk_api::SyncInstrumentCore>) -> Self {
         Measurement { number, instrument }
     }
 
@@ -31,7 +31,7 @@ impl Measurement {
     }
 
     /// The instrument that recorded this measurement
-    pub fn instrument(&self) -> &Arc<dyn sdk_api::SyncInstrument> {
+    pub fn instrument(&self) -> &Arc<dyn sdk_api::SyncInstrumentCore> {
         &self.instrument
     }
 }
@@ -39,13 +39,13 @@ impl Measurement {
 /// Wrapper around a sdk-implemented sync instrument for a given type
 #[derive(Debug)]
 pub(crate) struct SyncInstrument<T> {
-    instrument: Arc<dyn sdk_api::SyncInstrument>,
+    instrument: Arc<dyn sdk_api::SyncInstrumentCore>,
     _marker: marker::PhantomData<T>,
 }
 
 impl<T> SyncInstrument<T> {
     /// Create a new sync instrument from an sdk-implemented sync instrument
-    pub(crate) fn new(instrument: Arc<dyn sdk_api::SyncInstrument>) -> Self {
+    pub(crate) fn new(instrument: Arc<dyn sdk_api::SyncInstrumentCore>) -> Self {
         SyncInstrument {
             instrument,
             _marker: marker::PhantomData,
@@ -67,7 +67,7 @@ impl<T> SyncInstrument<T> {
     }
 
     /// Reference to the underlying sdk-implemented instrument
-    pub(crate) fn instrument(&self) -> &Arc<dyn sdk_api::SyncInstrument> {
+    pub(crate) fn instrument(&self) -> &Arc<dyn sdk_api::SyncInstrumentCore> {
         &self.instrument
     }
 }
@@ -75,7 +75,7 @@ impl<T> SyncInstrument<T> {
 /// Wrapper around a sdk-implemented sync bound instrument
 #[derive(Debug)]
 pub(crate) struct SyncBoundInstrument<T> {
-    bound_instrument: Arc<dyn sdk_api::SyncBoundInstrument>,
+    bound_instrument: Arc<dyn sdk_api::SyncBoundInstrumentCore>,
     _marker: marker::PhantomData<T>,
 }
 

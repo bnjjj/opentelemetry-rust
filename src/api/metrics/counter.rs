@@ -54,7 +54,7 @@ where
     }
 }
 
-/// TODO
+/// Configuration for building a counter.
 #[derive(Debug)]
 pub struct CounterBuilder<'a, T> {
     meter: &'a Meter,

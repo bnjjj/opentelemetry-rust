@@ -54,7 +54,7 @@ where
     }
 }
 
-/// TODO
+/// Configuration for a new up down counter.
 #[derive(Debug)]
 pub struct UpDownCounterBuilder<'a, T> {
     meter: &'a Meter,

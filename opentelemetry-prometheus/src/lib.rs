@@ -1,377 +1,391 @@
 //! # OpenTelemetry Prometheus Exporter
 //!
-//! Collects OpenTelemetry metrics and reports them to a given Jaeger
-//! `agent` or `collector` endpoint. See the [Jaeger Docs] for details
-//! and deployment information.
+//! ### Prometheus Exporter Example
 //!
-//! ### Jaeger Exporter Example
+//! ```rust
+//! use opentelemetry::{global, api::KeyValue, sdk::Resource};
+//! use opentelemetry_prometheus::PrometheusExporter;
+//! use prometheus::{TextEncoder, Encoder};
 //!
-//! This example expects a Jaeger agent running on `localhost:6831`.
-//!
-//! ```rust,no_run
-//! use opentelemetry::{api::Key, global, sdk};
-//!
-//! fn init_meter() -> metrics::Result<PushController> {
-//!     exporter::metrics::stdout(tokio::spawn, tokio::time::interval)
-//!         .with_quantiles(vec![0.5, 0.9, 0.99])
-//!         .with_pretty_print(false)
-//!         .try_init()
+//! fn init_meter() -> PrometheusExporter {
+//!     opentelemetry_prometheus::exporter()
+//!         .with_resource(Resource::new(vec![KeyValue::new("R", "V")]))
+//!         .init()
 //! }
 //!
-//! fn main() -> thrift::Result<()> {
-//!     let _started = init_meter()?;
-//!     let meter = global::meter("my-meter");
-//!     // Use configured meter
-//!     Ok(())
-//! }
+//! let exporter = init_meter();
+//! let meter = global::meter("my-app");
+//!
+//! // Use two instruments
+//! let counter = meter
+//!     .u64_counter("a.counter")
+//!     .with_description("Counts things")
+//!     .init();
+//! let recorder = meter
+//!     .i64_value_recorder("a.value_recorder")
+//!     .with_description("Records values")
+//!     .init();
+//!
+//! counter.add(100, &[KeyValue::new("key", "value")]);
+//! recorder.record(100, &[KeyValue::new("key", "value")]);
+//!
+//! // Encode data as text or protobuf
+//! let encoder = TextEncoder::new();
+//! let metric_families = exporter.registry().gather();
+//! let mut result = Vec::new();
+//! encoder.encode(&metric_families, &mut result);
+//!
+//! // result now contains encoded metrics:
+//! //
+//! // # HELP a_counter Counts things
+//! // # TYPE a_counter counter
+//! // a_counter{R="V",key="value"} 100
+//! // # HELP a_value_recorder Records values
+//! // # TYPE a_value_recorder histogram
+//! // a_value_recorder_bucket{R="V",key="value",le="0.5"} 0
+//! // a_value_recorder_bucket{R="V",key="value",le="0.9"} 0
+//! // a_value_recorder_bucket{R="V",key="value",le="0.99"} 0
+//! // a_value_recorder_bucket{R="V",key="value",le="+Inf"} 1
+//! // a_value_recorder_sum{R="V",key="value"} 100
+//! // a_value_recorder_count{R="V",key="value"} 1
 //! ```
 
-/// TODO
+use opentelemetry::api::{
+    labels,
+    metrics::{registry::RegistryMeterProvider, MetricsError, NumberKind},
+    KeyValue,
+};
+use opentelemetry::global;
+use opentelemetry::sdk::{
+    export::metrics::{CheckpointSet, Histogram, Record, Sum},
+    metrics::{
+        aggregators::{HistogramAggregator, SumAggregator},
+        controllers,
+        selectors::simple::Selector,
+        PullController,
+    },
+    Resource,
+};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+mod sanitize;
+
+use sanitize::sanitize;
+
+/// Cache disabled by default.
+const DEFAULT_CACHE_PERIOD: Duration = Duration::from_secs(0);
+
+/// Create a new prometheus exporter builder.
 pub fn exporter() -> ExporterBuilder {
-    ExporterBuilder
+    ExporterBuilder::default()
 }
 
-pub struct ExporterBuilder;
+/// Configuration for the prometheus exporter.
+#[derive(Debug, Default)]
+pub struct ExporterBuilder {
+    /// The OpenTelemetry `Resource` associated with all Meters
+    /// created by the pull controller.
+    resource: Option<Resource>,
+
+    /// The period which a recently-computed result will be returned without
+    /// gathering metric data again.
+    ///
+    /// If the period is zero, caching of the result is disabled, which is the
+    /// prometheus default.
+    cache_period: Option<Duration>,
+
+    /// The default summary quantiles to use. Use nil to specify the system-default
+    /// summary quantiles.
+    default_summary_quantiles: Option<Vec<f64>>,
+
+    /// Defines the default histogram bucket boundaries.
+    default_histogram_boundaries: Option<Vec<f64>>,
+
+    /// The prometheus registry that will be used to register instruments.
+    ///
+    /// If not set a new empty `Registry` is created.
+    registry: Option<prometheus::Registry>,
+}
 
 impl ExporterBuilder {
-    pub fn init(self) {
-        //
+    /// Set the resource to be associated with all `Meter`s for this exporter
+    pub fn with_resource(self, resource: Resource) -> Self {
+        ExporterBuilder {
+            resource: Some(resource),
+            ..self
+        }
+    }
+
+    /// Set the period which a recently-computed result will be returned without
+    /// gathering metric data again.
+    ///
+    /// If the period is zero, caching of the result is disabled. The default value
+    /// is 10 seconds.
+    pub fn with_cache_period(self, period: Duration) -> Self {
+        ExporterBuilder {
+            cache_period: Some(period),
+            ..self
+        }
+    }
+
+    /// Set the default summary quantiles to be used by exported prometheus histograms
+    pub fn with_default_summary_quantiles(self, quantiles: Vec<f64>) -> Self {
+        ExporterBuilder {
+            default_summary_quantiles: Some(quantiles),
+            ..self
+        }
+    }
+
+    /// Set the default boundaries to be used by exported prometheus histograms
+    pub fn with_default_histogram_boundaries(self, boundaries: Vec<f64>) -> Self {
+        ExporterBuilder {
+            default_histogram_boundaries: Some(boundaries),
+            ..self
+        }
+    }
+
+    /// Set the prometheus registry to be used by this exporter
+    pub fn with_registry(self, registry: prometheus::Registry) -> Self {
+        ExporterBuilder {
+            registry: Some(registry),
+            ..self
+        }
+    }
+
+    /// Sets up a complete export pipeline with the recommended setup,
+    /// using the recommended selector and standard integrator.  See the pull.Options.
+    pub fn init(self) -> PrometheusExporter {
+        let registry = self.registry.unwrap_or_else(prometheus::Registry::new);
+        let default_summary_quantiles = self
+            .default_summary_quantiles
+            .unwrap_or_else(|| vec![0.5, 0.9, 0.99]);
+        let default_histogram_boundaries = self
+            .default_histogram_boundaries
+            .unwrap_or_else(|| vec![0.5, 0.9, 0.99]);
+        let selector = Box::new(Selector::Histogram(default_histogram_boundaries.clone()));
+        let mut controller_builder = controllers::pull(selector)
+            .with_stateful(true)
+            .with_cache_period(self.cache_period.unwrap_or(DEFAULT_CACHE_PERIOD))
+            .with_error_handler(|err| eprintln!("ERROR: {:?}", err));
+        if let Some(resource) = self.resource {
+            controller_builder = controller_builder.with_resource(resource);
+        }
+        let controller = controller_builder.build();
+
+        global::set_meter_provider(controller.provider());
+
+        PrometheusExporter::new(
+            registry,
+            controller,
+            default_summary_quantiles,
+            default_histogram_boundaries,
+        )
     }
 }
 
-/// Exporter is an implementation of metric.Exporter that sends metrics to
-/// Prometheus.
+/// An implementation of `metrics::Exporter` that sends metrics to Prometheus.
 ///
 /// This exporter supports Prometheus pulls, as such it does not
 /// implement the export.Exporter interface.
-pub struct Exporter {
-    // handler http.Handler
-
-// registerer: prometheus.Registerer
-// gatherer   prometheus.Gatherer
-//
-// // lock protects access to the controller. The controller
-// // exposes its own lock, but using a dedicated lock in this
-// // struct allows the exporter to potentially support multiple
-// // controllers (e.g., with different resources).
-// lock       sync.RWMutex
-// controller *pull.Controller
-//
-// defaultSummaryQuantiles    []float64
-// defaultHistogramBoundaries []float64
+#[derive(Debug)]
+pub struct PrometheusExporter {
+    registry: prometheus::Registry,
+    controller: Arc<Mutex<PullController>>,
+    default_summary_quantiles: Vec<f64>,
+    default_histogram_boundaries: Vec<f64>,
 }
-//
-// var _ http.Handler = &Exporter{}
-//
-// // Config is a set of configs for the tally reporter.
-// type Config struct {
-// 	// Registry is the prometheus registry that will be used as the default Registerer and
-// 	// Gatherer if these are not specified.
-// 	//
-// 	// If not set a new empty Registry is created.
-// 	Registry *prometheus.Registry
-//
-// 	// Registerer is the prometheus registerer to register
-// 	// metrics with.
-// 	//
-// 	// If not specified the Registry will be used as default.
-// 	Registerer prometheus.Registerer
-//
-// 	// Gatherer is the prometheus gatherer to gather
-// 	// metrics with.
-// 	//
-// 	// If not specified the Registry will be used as default.
-// 	Gatherer prometheus.Gatherer
-//
-// 	// DefaultSummaryQuantiles is the default summary quantiles
-// 	// to use. Use nil to specify the system-default summary quantiles.
-// 	DefaultSummaryQuantiles []float64
-//
-// 	// DefaultHistogramBoundaries defines the default histogram bucket
-// 	// boundaries.
-// 	DefaultHistogramBoundaries []float64
-// }
-//
-// // NewExportPipeline sets up a complete export pipeline with the recommended setup,
-// // using the recommended selector and standard integrator.  See the pull.Options.
-// func NewExportPipeline(config Config, options ...pull.Option) (*Exporter, error) {
-// 	if config.Registry == nil {
-// 		config.Registry = prometheus.NewRegistry()
-// 	}
-//
-// 	if config.Registerer == nil {
-// 		config.Registerer = config.Registry
-// 	}
-//
-// 	if config.Gatherer == nil {
-// 		config.Gatherer = config.Registry
-// 	}
-//
-// 	e := &Exporter{
-// 		handler:                    promhttp.HandlerFor(config.Gatherer, promhttp.HandlerOpts{}),
-// 		registerer:                 config.Registerer,
-// 		gatherer:                   config.Gatherer,
-// 		defaultSummaryQuantiles:    config.DefaultSummaryQuantiles,
-// 		defaultHistogramBoundaries: config.DefaultHistogramBoundaries,
-// 	}
-//
-// 	c := &collector{
-// 		exp: e,
-// 	}
-// 	e.SetController(config, options...)
-// 	if err := config.Registerer.Register(c); err != nil {
-// 		return nil, fmt.Errorf("cannot register the collector: %w", err)
-// 	}
-//
-// 	return e, nil
-// }
-//
-// // InstallNewPipeline instantiates a NewExportPipeline and registers it globally.
-// // Typically called as:
-// //
-// // 	hf, err := prometheus.InstallNewPipeline(prometheus.Config{...})
-// //
-// // 	if err != nil {
-// // 		...
-// // 	}
-// // 	http.HandleFunc("/metrics", hf)
-// // 	defer pipeline.Stop()
-// // 	... Done
-// func InstallNewPipeline(config Config, options ...pull.Option) (*Exporter, error) {
-// 	exp, err := NewExportPipeline(config, options...)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	global.SetMeterProvider(exp.Provider())
-// 	return exp, nil
-// }
-//
-// // SetController sets up a standard *pull.Controller as the metric provider
-// // for this exporter.
-// func (e *Exporter) SetController(config Config, options ...pull.Option) {
-// 	e.lock.Lock()
-// 	defer e.lock.Unlock()
-// 	// Prometheus uses a stateful pull controller since instruments are
-// 	// cumulative and should not be reset after each collection interval.
-// 	//
-// 	// Prometheus uses this approach to be resilient to scrape failures.
-// 	// If a Prometheus server tries to scrape metrics from a host and fails for some reason,
-// 	// it could try again on the next scrape and no data would be lost, only resolution.
-// 	//
-// 	// Gauges (or LastValues) and Summaries are an exception to this and have different behaviors.
-// 	//
-// 	// TODO: Prometheus supports "Gauge Histogram" which are
-// 	// expressed as delta histograms.
-// 	e.controller = pull.New(
-// 		simple.NewWithHistogramDistribution(config.DefaultHistogramBoundaries),
-// 		append(options, pull.WithStateful(true))...,
-// 	)
-// }
-//
-// // Provider returns the metric.Provider of this exporter.
-// func (e *Exporter) Provider() metric.Provider {
-// 	return e.controller.Provider()
-// }
-//
-// // Controller returns the controller object that coordinates collection for the SDK.
-// func (e *Exporter) Controller() *pull.Controller {
-// 	e.lock.RLock()
-// 	defer e.lock.RUnlock()
-// 	return e.controller
-// }
-//
-// func (e *Exporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-// 	e.handler.ServeHTTP(w, r)
-// }
-//
-// // collector implements prometheus.Collector interface.
-// type collector struct {
-// 	exp *Exporter
-// }
-//
-// var _ prometheus.Collector = (*collector)(nil)
-//
-// func (c *collector) Describe(ch chan<- *prometheus.Desc) {
-// 	c.exp.lock.RLock()
-// 	defer c.exp.lock.RUnlock()
-//
-// 	_ = c.exp.Controller().ForEach(func(record export.Record) error {
-// 		var labelKeys []string
-// 		mergeLabels(record, &labelKeys, nil)
-// 		ch <- c.toDesc(record, labelKeys)
-// 		return nil
-// 	})
-// }
-//
-// // Collect exports the last calculated CheckpointSet.
-// //
-// // Collect is invoked whenever prometheus.Gatherer is also invoked.
-// // For example, when the HTTP endpoint is invoked by Prometheus.
-// func (c *collector) Collect(ch chan<- prometheus.Metric) {
-// 	c.exp.lock.RLock()
-// 	defer c.exp.lock.RUnlock()
-//
-// 	ctrl := c.exp.Controller()
-// 	ctrl.Collect(context.Background())
-//
-// 	err := ctrl.ForEach(func(record export.Record) error {
-// 		agg := record.Aggregator()
-// 		numberKind := record.Descriptor().NumberKind()
-//
-// 		var labelKeys, labels []string
-// 		mergeLabels(record, &labelKeys, &labels)
-//
-// 		desc := c.toDesc(record, labelKeys)
-//
-// 		if hist, ok := agg.(aggregator.Histogram); ok {
-// 			if err := c.exportHistogram(ch, hist, numberKind, desc, labels); err != nil {
-// 				return fmt.Errorf("exporting histogram: %w", err)
-// 			}
-// 		} else if dist, ok := agg.(aggregator.Distribution); ok {
-// 			// TODO: summaries values are never being resetted.
-// 			//  As measurements are recorded, new records starts to have less impact on these summaries.
-// 			//  We should implement an solution that is similar to the Prometheus Clients
-// 			//  using a rolling window for summaries could be a solution.
-// 			//
-// 			//  References:
-// 			// 	https://www.robustperception.io/how-does-a-prometheus-summary-work
-// 			//  https://github.com/prometheus/client_golang/blob/fa4aa9000d2863904891d193dea354d23f3d712a/prometheus/summary.go#L135
-// 			if err := c.exportSummary(ch, dist, numberKind, desc, labels); err != nil {
-// 				return fmt.Errorf("exporting summary: %w", err)
-// 			}
-// 		} else if sum, ok := agg.(aggregator.Sum); ok {
-// 			if err := c.exportCounter(ch, sum, numberKind, desc, labels); err != nil {
-// 				return fmt.Errorf("exporting counter: %w", err)
-// 			}
-// 		} else if lastValue, ok := agg.(aggregator.LastValue); ok {
-// 			if err := c.exportLastValue(ch, lastValue, numberKind, desc, labels); err != nil {
-// 				return fmt.Errorf("exporting last value: %w", err)
-// 			}
-// 		}
-// 		return nil
-// 	})
-// 	if err != nil {
-// 		global.Handle(err)
-// 	}
-// }
-//
-// func (c *collector) exportLastValue(ch chan<- prometheus.Metric, lvagg aggregator.LastValue, kind metric.NumberKind, desc *prometheus.Desc, labels []string) error {
-// 	lv, _, err := lvagg.LastValue()
-// 	if err != nil {
-// 		return fmt.Errorf("error retrieving last value: %w", err)
-// 	}
-//
-// 	m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, lv.CoerceToFloat64(kind), labels...)
-// 	if err != nil {
-// 		return fmt.Errorf("error creating constant metric: %w", err)
-// 	}
-//
-// 	ch <- m
-// 	return nil
-// }
-//
-// func (c *collector) exportCounter(ch chan<- prometheus.Metric, sum aggregator.Sum, kind metric.NumberKind, desc *prometheus.Desc, labels []string) error {
-// 	v, err := sum.Sum()
-// 	if err != nil {
-// 		return fmt.Errorf("error retrieving counter: %w", err)
-// 	}
-//
-// 	m, err := prometheus.NewConstMetric(desc, prometheus.CounterValue, v.CoerceToFloat64(kind), labels...)
-// 	if err != nil {
-// 		return fmt.Errorf("error creating constant metric: %w", err)
-// 	}
-//
-// 	ch <- m
-// 	return nil
-// }
-//
-// func (c *collector) exportSummary(ch chan<- prometheus.Metric, dist aggregator.Distribution, kind metric.NumberKind, desc *prometheus.Desc, labels []string) error {
-// 	count, err := dist.Count()
-// 	if err != nil {
-// 		return fmt.Errorf("error retrieving count: %w", err)
-// 	}
-//
-// 	var sum metric.Number
-// 	sum, err = dist.Sum()
-// 	if err != nil {
-// 		return fmt.Errorf("error retrieving distribution sum: %w", err)
-// 	}
-//
-// 	quantiles := make(map[float64]float64)
-// 	for _, quantile := range c.exp.defaultSummaryQuantiles {
-// 		q, _ := dist.Quantile(quantile)
-// 		quantiles[quantile] = q.CoerceToFloat64(kind)
-// 	}
-//
-// 	m, err := prometheus.NewConstSummary(desc, uint64(count), sum.CoerceToFloat64(kind), quantiles, labels...)
-// 	if err != nil {
-// 		return fmt.Errorf("error creating constant summary: %w", err)
-// 	}
-//
-// 	ch <- m
-// 	return nil
-// }
-//
-// func (c *collector) exportHistogram(ch chan<- prometheus.Metric, hist aggregator.Histogram, kind metric.NumberKind, desc *prometheus.Desc, labels []string) error {
-// 	buckets, err := hist.Histogram()
-// 	if err != nil {
-// 		return fmt.Errorf("error retrieving histogram: %w", err)
-// 	}
-// 	sum, err := hist.Sum()
-// 	if err != nil {
-// 		return fmt.Errorf("error retrieving sum: %w", err)
-// 	}
-//
-// 	var totalCount uint64
-// 	// counts maps from the bucket upper-bound to the cumulative count.
-// 	// The bucket with upper-bound +inf is not included.
-// 	counts := make(map[float64]uint64, len(buckets.Boundaries))
-// 	for i := range buckets.Boundaries {
-// 		boundary := buckets.Boundaries[i]
-// 		totalCount += uint64(buckets.Counts[i])
-// 		counts[boundary] = totalCount
-// 	}
-// 	// Include the +inf bucket in the total count.
-// 	totalCount += uint64(buckets.Counts[len(buckets.Counts)-1])
-//
-// 	m, err := prometheus.NewConstHistogram(desc, totalCount, sum.CoerceToFloat64(kind), counts, labels...)
-// 	if err != nil {
-// 		return fmt.Errorf("error creating constant histogram: %w", err)
-// 	}
-//
-// 	ch <- m
-// 	return nil
-// }
-//
-// func (c *collector) toDesc(record export.Record, labelKeys []string) *prometheus.Desc {
-// 	desc := record.Descriptor()
-// 	return prometheus.NewDesc(sanitize(desc.Name()), desc.Description(), labelKeys, nil)
-// }
-//
-// // mergeLabels merges the export.Record's labels and resources into a
-// // single set, giving precedence to the record's labels in case of
-// // duplicate keys.  This outputs one or both of the keys and the
-// // values as a slice, and either argument may be nil to avoid
-// // allocating an unnecessary slice.
-// func mergeLabels(record export.Record, keys, values *[]string) {
-// 	if keys != nil {
-// 		*keys = make([]string, 0, record.Labels().Len()+record.Resource().Len())
-// 	}
-// 	if values != nil {
-// 		*values = make([]string, 0, record.Labels().Len()+record.Resource().Len())
-// 	}
-//
-// 	// Duplicate keys are resolved by taking the record label value over
-// 	// the resource value.
-// 	mi := label.NewMergeIterator(record.Labels(), record.Resource().LabelSet())
-// 	for mi.Next() {
-// 		label := mi.Label()
-// 		if keys != nil {
-// 			*keys = append(*keys, sanitize(string(label.Key)))
-// 		}
-// 		if values != nil {
-// 			*values = append(*values, label.Value.Emit())
-// 		}
-// 	}
-// }
-//
+
+impl PrometheusExporter {
+    /// Create a new prometheus exporter
+    pub fn new(
+        registry: prometheus::Registry,
+        controller: PullController,
+        default_summary_quantiles: Vec<f64>,
+        default_histogram_boundaries: Vec<f64>,
+    ) -> Self {
+        let controller = Arc::new(Mutex::new(controller));
+        let collector = Collector::with_controller(controller.clone());
+        // FIXME: return result instead
+        let _ = registry.register(Box::new(collector));
+        PrometheusExporter {
+            registry,
+            controller,
+            default_summary_quantiles,
+            default_histogram_boundaries,
+        }
+    }
+
+    /// Returns a reference to the current prometheus registry.
+    pub fn registry(&self) -> &prometheus::Registry {
+        &self.registry
+    }
+
+    pub fn provider(&self) -> Result<RegistryMeterProvider, MetricsError> {
+        self.controller
+            .lock()
+            .map_err(Into::into)
+            .map(|locked| locked.provider())
+    }
+}
+
+#[derive(Debug)]
+struct Collector {
+    controller: Arc<Mutex<PullController>>,
+}
+
+impl Collector {
+    fn with_controller(controller: Arc<Mutex<PullController>>) -> Self {
+        Collector { controller }
+    }
+}
+
+impl prometheus::core::Collector for Collector {
+    /// Unused as descriptors are dynamically registered.
+    fn desc(&self) -> Vec<&prometheus::core::Desc> {
+        Vec::new()
+    }
+
+    /// Collect all otel metrics and convert to prometheus metrics.
+    fn collect(&self) -> Vec<prometheus::proto::MetricFamily> {
+        if let Ok(mut controller) = self.controller.lock() {
+            controller.collect();
+            let mut metrics = Vec::new();
+
+            // FIXME: handle errors here instead of ignoring
+            let _ = controller.try_for_each(&mut |record| {
+                let agg = record.aggregator();
+                let number_kind = record.descriptor().number_kind();
+
+                let mut label_keys = Vec::new();
+                let mut label_values = Vec::new();
+                merge_labels(record, &mut label_keys, Some(&mut label_values));
+
+                let desc = to_desc(&record, label_keys);
+
+                if let Some(hist) = agg.as_any().downcast_ref::<HistogramAggregator>() {
+                    metrics.push(build_histogram(hist, number_kind, desc, label_values)?);
+                } else if let Some(sum) = agg.as_any().downcast_ref::<SumAggregator>() {
+                    metrics.push(build_counter(sum, number_kind, desc, label_values)?);
+                }
+
+                Ok(())
+            });
+
+            metrics
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+fn build_counter(
+    sum: &SumAggregator,
+    kind: &NumberKind,
+    desc: prometheus::core::Desc,
+    labels: Vec<KeyValue>,
+) -> Result<prometheus::proto::MetricFamily, MetricsError> {
+    let sum = sum.sum()?;
+
+    let mut c = prometheus::proto::Counter::default();
+    c.set_value(sum.to_f64(kind));
+
+    let mut m = prometheus::proto::Metric::default();
+    m.set_label(protobuf::RepeatedField::from_vec(
+        labels.into_iter().map(build_label_pair).collect(),
+    ));
+    m.set_counter(c);
+
+    let mut mf = prometheus::proto::MetricFamily::default();
+    mf.set_name(desc.fq_name);
+    mf.set_help(desc.help);
+    mf.set_field_type(prometheus::proto::MetricType::COUNTER);
+    mf.set_metric(protobuf::RepeatedField::from_vec(vec![m]));
+
+    Ok(mf)
+}
+
+fn build_histogram(
+    hist: &HistogramAggregator,
+    kind: &NumberKind,
+    desc: prometheus::core::Desc,
+    labels: Vec<KeyValue>,
+) -> Result<prometheus::proto::MetricFamily, MetricsError> {
+    let raw_buckets = hist.histogram()?;
+    let sum = hist.sum()?;
+
+    let mut h = prometheus::proto::Histogram::default();
+    h.set_sample_sum(sum.to_f64(kind));
+
+    let mut count = 0;
+    let mut buckets = Vec::with_capacity(raw_buckets.boundaries().len());
+    for (i, upper_bound) in raw_buckets.boundaries().iter().enumerate() {
+        count += raw_buckets.counts()[i] as u64;
+        let mut b = prometheus::proto::Bucket::default();
+        b.set_cumulative_count(count);
+        b.set_upper_bound(*upper_bound);
+        buckets.push(b);
+    }
+    // Include the +inf bucket in the total count.
+    count += raw_buckets.counts()[raw_buckets.counts().len() - 1] as u64;
+    h.set_bucket(protobuf::RepeatedField::from_vec(buckets));
+    h.set_sample_count(count);
+
+    let mut m = prometheus::proto::Metric::default();
+    m.set_label(protobuf::RepeatedField::from_vec(
+        labels.into_iter().map(build_label_pair).collect(),
+    ));
+    m.set_histogram(h);
+
+    let mut mf = prometheus::proto::MetricFamily::default();
+    mf.set_name(desc.fq_name);
+    mf.set_help(desc.help);
+    mf.set_field_type(prometheus::proto::MetricType::HISTOGRAM);
+    mf.set_metric(protobuf::RepeatedField::from_vec(vec![m]));
+
+    Ok(mf)
+}
+
+fn build_label_pair(label: KeyValue) -> prometheus::proto::LabelPair {
+    let mut lp = prometheus::proto::LabelPair::new();
+    lp.set_name(label.key.into());
+    lp.set_value(label.value.into());
+
+    lp
+}
+
+fn merge_labels(record: &Record, keys: &mut Vec<String>, mut values: Option<&mut Vec<KeyValue>>) {
+    // Duplicate keys are resolved by taking the record label value over
+    // the resource value.
+
+    // FIXME: Resource label set
+    let record_labels = labels::Set::from(
+        record
+            .resource()
+            .iter()
+            .map(|(key, value)| KeyValue::new(key.clone(), value.clone()))
+            .collect::<Vec<_>>(),
+    );
+    let iter = labels::merge_iters(record.labels().iter(), record_labels.iter());
+    for label in iter {
+        keys.push(sanitize(label.key.as_str()));
+        if let Some(ref mut values) = values {
+            values.push(label.clone());
+        }
+    }
+}
+
+fn to_desc(record: &Record, label_keys: Vec<String>) -> prometheus::core::Desc {
+    let desc = record.descriptor();
+    prometheus::core::Desc::new(
+        sanitize(desc.name()),
+        // FIXME: default help value?
+        desc.description()
+            .cloned()
+            .unwrap_or_else(|| desc.name().to_string()),
+        label_keys,
+        HashMap::new(),
+    )
+    .unwrap()
+}

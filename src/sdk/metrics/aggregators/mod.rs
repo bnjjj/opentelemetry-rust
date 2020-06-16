@@ -23,7 +23,9 @@ pub fn range_test(number: &Number, descriptor: &Descriptor) -> Result<()> {
     }
 
     match descriptor.instrument_kind() {
-        InstrumentKind::Counter | InstrumentKind::SumObserver => {
+        InstrumentKind::Counter | InstrumentKind::SumObserver
+            if descriptor.number_kind() == &NumberKind::F64 =>
+        {
             if number.is_negative(descriptor.number_kind()) {
                 return Err(MetricsError::NegativeInput);
             }

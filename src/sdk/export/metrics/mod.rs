@@ -53,18 +53,21 @@ pub trait Integrator: fmt::Debug {
 /// context from the SDK, after the aggregator is checkpointed, allowing the
 /// integrator to build the set of metrics currently being exported.
 pub trait LockedIntegrator {
-    /// Process is called by the SDK once per internal record,
-    /// passing the export Record (a Descriptor, the corresponding
-    /// Labels, and the checkpointed Aggregator).
+    /// Process is called by the SDK once per internal record, passing the export
+    /// Record (a Descriptor, the corresponding Labels, and the checkpointed
+    /// Aggregator).
     ///
-    /// The Context argument originates from the controller that
-    /// orchestrates collection.
+    /// The Context argument originates from the controller that orchestrates
+    /// collection.
     fn process(&mut self, record: Record) -> Result<()>;
 
-    /// TODO
+    /// Allows a controller to access a complete checkpoint of aggregated metrics
+    /// from the Integrator. This is passed to the Exporter which may then iterate
+    /// over the collection of aggregated metrics.
     fn checkpoint_set(&mut self) -> &mut dyn CheckpointSet;
 
-    /// TODO
+    /// Cleanup logic or other behavior that needs to be run by the integrator after
+    /// collection is complete.
     fn finished_collection(&mut self);
 }
 
@@ -147,11 +150,7 @@ pub trait Aggregator: fmt::Debug {
     ///
     /// The owner of an `Aggregator` being merged is responsible for synchronization
     /// of both `Aggregator` states.
-    fn merge(
-        &self,
-        other: &Arc<dyn Aggregator + Send + Sync>,
-        descriptor: &Descriptor,
-    ) -> Result<()>;
+    fn merge(&self, other: &(dyn Aggregator + Send + Sync), descriptor: &Descriptor) -> Result<()>;
 
     /// Returns the implementing aggregator as `Any` for downcasting.
     fn as_any(&self) -> &dyn Any;
@@ -215,22 +214,23 @@ impl<'a> Record<'a> {
             aggregator,
         }
     }
-    /// TODO
+
+    /// The descriptor for this metric.
     pub fn descriptor(&self) -> &Descriptor {
         self.descriptor
     }
 
-    /// TODO
+    /// The labels for this metric.
     pub fn labels(&self) -> &labels::Set {
         self.labels
     }
 
-    /// TODO
+    /// The resource for this metric.
     pub fn resource(&self) -> &Resource {
         self.resource
     }
 
-    /// TODO
+    /// The aggregator for this metric.
     pub fn aggregator(&self) -> &Arc<dyn Aggregator + Send + Sync> {
         self.aggregator
     }

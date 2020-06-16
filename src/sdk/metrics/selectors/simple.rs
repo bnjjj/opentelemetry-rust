@@ -4,14 +4,20 @@ use crate::sdk::export::metrics::{AggregationSelector, Aggregator};
 use crate::sdk::metrics::aggregators;
 use std::sync::Arc;
 
-/// TODO
+/// Aggregtion selection strategies.
 #[derive(Debug)]
 pub enum Selector {
-    /// TODO
+    /// A simple aggregation selector that uses sum, and minmaxsumcount
+    /// aggregators for metrics. This selector is faster and uses less memory
+    /// than the others because minmaxsumcount does not aggregate quantile
+    /// information.
     Inexpensive,
-    /// TODO
+    /// A simple aggregation selector that uses sum and array aggregators for
+    /// metrics. This selector is able to compute exact quantiles.
     Exact,
-    /// TODO
+    /// A simple aggregation selector that uses sum, and histogram aggregators
+    /// for metrics. This selector uses more memory than `Inexpensive` because
+    /// it uses a counter per bucket.
     Histogram(Vec<f64>),
 }
 

@@ -125,13 +125,13 @@ impl Number {
         match number_kind {
             NumberKind::I64 => {
                 let current = self.0.load(Ordering::Acquire);
-                (current as i64).is_positive()
+                (current as i64).is_negative()
             }
             NumberKind::F64 => {
                 let current = self.0.load(Ordering::Acquire);
-                u64_to_f64(current).is_sign_positive()
+                u64_to_f64(current).is_sign_negative()
             }
-            NumberKind::U64 => true,
+            NumberKind::U64 => false,
         }
     }
 

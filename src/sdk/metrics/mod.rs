@@ -1,6 +1,6 @@
 //! # OpenTelemetry Metrics SDK
 use crate::api::metrics::{
-    sdk_api::{self, Instrument as _, SyncBoundInstrument as _},
+    sdk_api::{self, InstrumentCore as _, SyncBoundInstrumentCore as _},
     AsyncRunner, Descriptor, Measurement, MetricsError, Number, NumberKind, Observation, Result,
 };
 use crate::api::{labels, Context, KeyValue};
@@ -24,14 +24,14 @@ pub mod controllers;
 pub mod integrators;
 pub mod selectors;
 
-pub use controllers::{PushController, PushControllerWorker};
+pub use controllers::{PullController, PushController, PushControllerWorker};
 
-///TODO
+/// A user-defined function for handling metrics errors
 #[derive(Clone)]
 pub struct ErrorHandler(Arc<dyn Fn(MetricsError) + Send + Sync>);
 
 impl ErrorHandler {
-    /// TODO
+    /// Call the user-defined error handling function with the given error
     pub fn call(&self, err: MetricsError) {
         self.0(err)
     }
@@ -46,7 +46,7 @@ impl fmt::Debug for ErrorHandler {
 }
 
 impl ErrorHandler {
-    /// TODO
+    /// Create a new error handler from a given function
     pub fn new<F>(handler: F) -> Self
     where
         F: Fn(MetricsError) + Send + Sync + 'static,
@@ -55,27 +55,25 @@ impl ErrorHandler {
     }
 }
 
-/// TODO
+/// Creates a new accumulator builder
 pub fn accumulator(integrator: Arc<dyn Integrator + Send + Sync>) -> AccumulatorBuilder {
     AccumulatorBuilder {
         integrator,
         error_handler: None,
-        push: false,
         resource: None,
     }
 }
 
-/// TODO
+/// Configuration for an accumulator
 #[derive(Debug)]
 pub struct AccumulatorBuilder {
     integrator: Arc<dyn Integrator + Send + Sync>,
     error_handler: Option<ErrorHandler>,
-    push: bool,
-    resource: Option<Arc<Resource>>,
+    resource: Option<Resource>,
 }
 
 impl AccumulatorBuilder {
-    /// TODO
+    /// Set the accumulator error handler function.
     pub fn with_error_handler(self, error_handler: ErrorHandler) -> Self {
         AccumulatorBuilder {
             error_handler: Some(error_handler),
@@ -83,29 +81,31 @@ impl AccumulatorBuilder {
         }
     }
 
-    /// TODO
-    pub fn with_push(self, push: bool) -> Self {
-        AccumulatorBuilder { push, ..self }
-    }
-
-    /// TODO
-    pub fn with_resource(self, resource: Arc<Resource>) -> Self {
+    /// The resource that will be applied to all records in this accumulator.
+    pub fn with_resource(self, resource: Resource) -> Self {
         AccumulatorBuilder {
             resource: Some(resource),
             ..self
         }
     }
 
-    /// TODO
+    /// Create a new accumulator from this configuration
     pub fn build(self) -> Accumulator {
         Accumulator(Arc::new(AccumulatorCore::new(
             self.integrator,
             self.error_handler,
+            self.resource.unwrap_or_default(),
         )))
     }
 }
 
-/// TODO
+/// Accumulator implements the OpenTelemetry Meter API. The Accumulator is bound
+/// to a single `Integrator`.
+///
+/// The Accumulator supports a collect API to gather and export current data.
+/// `Collect` should be arranged according to the integrator model. Push-based
+/// integrators will setup a timer to call `collect` periodically. Pull-based
+/// integrators will call `collect` when a pull request arrives.
 #[derive(Debug, Clone)]
 pub struct Accumulator(Arc<AccumulatorCore>);
 
@@ -115,7 +115,7 @@ struct MapKey {
     ordered_hash: u64,
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 struct AsyncInstrumentState {
     // /// runnerMap keeps the set of runners that will run each
     // /// collection interval.  Singletons are entered with a real
@@ -127,7 +127,10 @@ struct AsyncInstrumentState {
     // runner_map: HashMap<Runner, Any>,
     /// runners maintains the set of runners in the order they were
     /// registered.
-    runners: Vec<(AsyncRunner, Arc<dyn sdk_api::AsyncInstrument + Send + Sync>)>,
+    runners: Vec<(
+        AsyncRunner,
+        Arc<dyn sdk_api::AsyncInstrumentCore + Send + Sync>,
+    )>,
     // instruments maintains the set of instruments in the order
     // they were registered.
 }
@@ -155,36 +158,20 @@ impl AsyncInstrumentState {
     }
 }
 
-/// TODO
 #[derive(Debug)]
 struct AccumulatorCore {
-    // current maps `mapkey` to *record.
-    // current: dashmap::DashMap<MapKey, Record>,
+    /// A concurrent map of current sync instrument state.
     current: flurry::HashMap<MapKey, Arc<Record>>,
-    //
-    // // asyncInstruments is a set of
+    /// A collection of async instrument state
     async_instruments: Mutex<AsyncInstrumentState>,
-    // asyncContext     context.Context
-    //
-    // // currentEpoch is the current epoch number. It is
-    // // incremented in `Collect()`.
+
+    /// The current epoch number. It is incremented in `collect`.
     current_epoch: Number,
-    //
-    // // integrator is the configured integrator+configuration.
+    /// THe configured integrator.
     integrator: Arc<dyn Integrator + Send + Sync>,
-    //
-    // // collectLock prevents simultaneous calls to Collect().
-    // collectLock sync.Mutex
-    //
-    // // errorHandler supports delivering errors to the user.
+    /// The user-defined error handler.
     error_handler: Option<ErrorHandler>,
-    //
-    // // asyncSortSlice has a single purpose - as a temporary
-    // // place for sorting during labels creation to avoid
-    // // allocation.  It is cleared after use.
-    // asyncSortSlice label.Sortable
-    //
-    // // resource is applied to all records in this Accumulator.
+    /// The resource applied to all records in this Accumulator.
     resource: Resource,
 }
 
@@ -192,22 +179,21 @@ impl AccumulatorCore {
     fn new(
         integrator: Arc<dyn Integrator + Send + Sync>,
         error_handler: Option<ErrorHandler>,
+        resource: Resource,
     ) -> Self {
         AccumulatorCore {
             current: flurry::HashMap::new(),
-            async_instruments: Mutex::new(AsyncInstrumentState {
-                runners: Vec::default(),
-            }),
+            async_instruments: Mutex::new(AsyncInstrumentState::default()),
             current_epoch: NumberKind::U64.zero(),
             integrator,
             error_handler,
-            resource: Resource::default(),
+            resource,
         }
     }
 
     fn register(
         &self,
-        instrument: Arc<dyn sdk_api::AsyncInstrument + Send + Sync>,
+        instrument: Arc<dyn sdk_api::AsyncInstrumentCore + Send + Sync>,
         runner: AsyncRunner,
     ) -> Result<()> {
         self.async_instruments
@@ -278,32 +264,6 @@ impl AccumulatorCore {
 
         checkpointed
     }
-
-    // fn checkpoint(
-    //     &self,
-    //     descriptor: &Descriptor,
-    //     recorder: Option<&Arc<dyn Aggregator + Send + Sync>>,
-    //     labels: &labels::Set,
-    //     locked_integrator: &mut dyn LockedIntegrator,
-    // ) -> usize {
-    //     todo!("update synchronized_copy params")
-    //     // match recorder {
-    //     //     None => 0,
-    //     //     Some(recorder) => {
-    //     //         recorder.synchronized_copy(descriptor);
-    //     //
-    //     //         let export_record =
-    //     //             export::metrics::record(descriptor, labels, &self.resource, recorder);
-    //     //         if let Err(err) = locked_integrator.process(export_record) {
-    //     //             if let Some(error_handler) = self.error_handler.as_ref() {
-    //     //                 error_handler.call(err)
-    //     //             }
-    //     //         }
-    //     //
-    //     //         1
-    //     //     }
-    //     // }
-    // }
 
     fn checkpoint_record(
         &self,
@@ -388,14 +348,12 @@ impl AccumulatorCore {
     }
 }
 
-///TODO
 #[derive(Debug, Clone)]
 struct SyncInstrument {
     instrument: Arc<Instrument>,
 }
 
 impl SyncInstrument {
-    /// TODO
     fn acquire_handle(&self, labels: &[KeyValue]) -> Arc<Record> {
         let mut hasher = DefaultHasher::new();
         self.instrument.descriptor.hash(&mut hasher);
@@ -442,17 +400,17 @@ impl SyncInstrument {
     }
 }
 
-impl sdk_api::Instrument for SyncInstrument {
+impl sdk_api::InstrumentCore for SyncInstrument {
     fn descriptor(&self) -> &Descriptor {
         self.instrument.descriptor()
     }
 }
 
-impl sdk_api::SyncInstrument for SyncInstrument {
+impl sdk_api::SyncInstrumentCore for SyncInstrument {
     fn bind<'a>(
         &self,
         labels: &'a [crate::api::KeyValue],
-    ) -> Arc<dyn sdk_api::SyncBoundInstrument + Send + Sync> {
+    ) -> Arc<dyn sdk_api::SyncBoundInstrumentCore + Send + Sync> {
         self.acquire_handle(labels)
     }
     fn record_one_with_context<'a>(
@@ -479,7 +437,6 @@ struct LabeledRecorder {
 #[derive(Debug, Clone)]
 struct AsyncInstrument {
     instrument: Arc<Instrument>,
-    // FIXME: this may not require Mutex if it is not accessed by multiple threads
     recorders: Arc<Mutex<Option<HashMap<u64, LabeledRecorder>>>>,
 }
 
@@ -560,13 +517,13 @@ impl AsyncInstrument {
     }
 }
 
-impl sdk_api::Instrument for AsyncInstrument {
+impl sdk_api::InstrumentCore for AsyncInstrument {
     fn descriptor(&self) -> &Descriptor {
         self.instrument.descriptor()
     }
 }
 
-impl sdk_api::AsyncInstrument for AsyncInstrument {
+impl sdk_api::AsyncInstrumentCore for AsyncInstrument {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -599,7 +556,7 @@ struct Record {
     checkpoint: Option<Arc<dyn Aggregator + Send + Sync>>,
 }
 
-impl sdk_api::SyncBoundInstrument for Record {
+impl sdk_api::SyncBoundInstrumentCore for Record {
     fn record_one_with_context<'a>(&self, cx: &Context, number: Number) {
         // check if the instrument is disabled according to the AggregationSelector.
         if let Some(recorder) = &self.current {
@@ -624,14 +581,13 @@ impl sdk_api::SyncBoundInstrument for Record {
     }
 }
 
-///TODO
 #[derive(Debug)]
-pub struct Instrument {
+struct Instrument {
     descriptor: Descriptor,
     meter: Accumulator,
 }
 
-impl sdk_api::Instrument for Instrument {
+impl sdk_api::InstrumentCore for Instrument {
     fn descriptor(&self) -> &Descriptor {
         &self.descriptor
     }
@@ -641,7 +597,7 @@ impl sdk_api::MeterCore for Accumulator {
     fn new_sync_instrument(
         &self,
         descriptor: Descriptor,
-    ) -> Result<Arc<dyn sdk_api::SyncInstrument + Send + Sync>> {
+    ) -> Result<Arc<dyn sdk_api::SyncInstrumentCore + Send + Sync>> {
         Ok(Arc::new(SyncInstrument {
             instrument: Arc::new(Instrument {
                 descriptor,
@@ -679,7 +635,7 @@ impl sdk_api::MeterCore for Accumulator {
         &self,
         descriptor: Descriptor,
         runner: AsyncRunner,
-    ) -> Result<Arc<dyn sdk_api::AsyncInstrument + Send + Sync>> {
+    ) -> Result<Arc<dyn sdk_api::AsyncInstrumentCore + Send + Sync>> {
         let instrument = Arc::new(AsyncInstrument {
             instrument: Arc::new(Instrument {
                 descriptor,

@@ -127,11 +127,7 @@ impl Aggregator for MinMaxSumCountAggregator {
         }
     }
 
-    fn merge(
-        &self,
-        aggregator: &Arc<dyn Aggregator + Send + Sync>,
-        desc: &Descriptor,
-    ) -> Result<()> {
+    fn merge(&self, aggregator: &(dyn Aggregator + Send + Sync), desc: &Descriptor) -> Result<()> {
         if let Some(other) = aggregator.as_any().downcast_ref::<Self>() {
             self.inner.lock().map_err(From::from).and_then(|mut inner| {
                 other.inner.lock().map_err(From::from).and_then(|oi| {
