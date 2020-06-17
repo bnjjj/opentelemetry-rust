@@ -74,7 +74,6 @@ impl Set {
             .map_or(String::new(), |mut encoders| {
                 for idx in 0..MAX_CONCURRENT_ENCODERS {
                     if let Some((_, encoded)) = &encoders[idx] {
-                        // FIXME can we return ref instead?
                         return encoded.clone();
                     }
                 }

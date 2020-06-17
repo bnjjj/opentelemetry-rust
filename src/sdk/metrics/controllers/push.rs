@@ -1,10 +1,11 @@
 use crate::api::metrics::registry;
+use crate::global;
 use crate::sdk::{
     export::metrics::{AggregationSelector, Exporter, LockedIntegrator},
     metrics::{
         self,
         integrators::{self, SimpleIntegrator},
-        Accumulator, ErrorHandler,
+        Accumulator,
     },
     Resource,
 };
@@ -35,7 +36,6 @@ where
         exporter: Box::new(exporter),
         spawn,
         interval,
-        error_handler: None,
         resource: None,
         stateful: None,
         period: None,
@@ -64,14 +64,12 @@ pub struct PushControllerWorker {
     accumulator: Accumulator,
     integrator: Arc<SimpleIntegrator>,
     exporter: Box<dyn Exporter + Send + Sync>,
-    error_handler: Option<ErrorHandler>,
     _timeout: time::Duration,
 }
 
 impl PushControllerWorker {
     fn on_tick(&mut self) {
-        // ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-        // defer cancel()
+        // TODO handle timeout
 
         if let Err(err) = self.integrator.lock().and_then(|mut locked_integrator| {
             self.accumulator.0.collect(&mut locked_integrator);
@@ -79,9 +77,7 @@ impl PushControllerWorker {
             locked_integrator.finished_collection();
             Ok(())
         }) {
-            if let Some(error_handler) = &self.error_handler {
-                error_handler.call(err);
-            }
+            global::handle(err)
         }
     }
 }
@@ -131,7 +127,6 @@ pub struct PushControllerBuilder<S, I> {
     exporter: Box<dyn Exporter + Send + Sync>,
     spawn: S,
     interval: I,
-    error_handler: Option<ErrorHandler>,
     resource: Option<Resource>,
     stateful: Option<bool>,
     period: Option<time::Duration>,
@@ -160,14 +155,6 @@ where
         }
     }
 
-    /// Configure the error handler this controller will use.
-    pub fn with_error_handler(self, error_handler: ErrorHandler) -> Self {
-        PushControllerBuilder {
-            error_handler: Some(error_handler),
-            ..self
-        }
-    }
-
     /// Configure the resource used by this controller
     pub fn with_resource(self, resource: Resource) -> Self {
         PushControllerBuilder {
@@ -181,10 +168,6 @@ where
         let integrator = integrators::simple(self.selector, self.stateful.unwrap_or(false));
         let integrator = Arc::new(integrator);
         let mut accumulator = metrics::accumulator(integrator.clone());
-
-        if let Some(error_handler) = &self.error_handler {
-            accumulator = accumulator.with_error_handler(error_handler.clone());
-        }
 
         if let Some(resource) = self.resource {
             accumulator = accumulator.with_resource(resource);
@@ -201,10 +184,7 @@ where
             accumulator,
             integrator,
             exporter: self.exporter,
-            error_handler: self.error_handler,
-            // ch:           make(chan struct{}),
             _timeout: self.timeout.unwrap_or(*DEFAULT_PUSH_PERIOD),
-            // clock:        controllerTime.RealClock{},
         });
 
         PushController {

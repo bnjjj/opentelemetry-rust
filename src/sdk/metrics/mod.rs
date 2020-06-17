@@ -1,9 +1,10 @@
 //! # OpenTelemetry Metrics SDK
 use crate::api::metrics::{
     sdk_api::{self, InstrumentCore as _, SyncBoundInstrumentCore as _},
-    AsyncRunner, Descriptor, Measurement, MetricsError, Number, NumberKind, Observation, Result,
+    AsyncRunner, Descriptor, Measurement, Number, NumberKind, Observation, Result,
 };
 use crate::api::{labels, Context, KeyValue};
+use crate::global;
 use crate::sdk::{
     export::{
         self,
@@ -15,7 +16,6 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
@@ -26,40 +26,10 @@ pub mod selectors;
 
 pub use controllers::{PullController, PushController, PushControllerWorker};
 
-/// A user-defined function for handling metrics errors
-#[derive(Clone)]
-pub struct ErrorHandler(Arc<dyn Fn(MetricsError) + Send + Sync>);
-
-impl ErrorHandler {
-    /// Call the user-defined error handling function with the given error
-    pub fn call(&self, err: MetricsError) {
-        self.0(err)
-    }
-}
-
-impl fmt::Debug for ErrorHandler {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ErrorHandler")
-            .field("closure", &"Fn(MetricsError)")
-            .finish()
-    }
-}
-
-impl ErrorHandler {
-    /// Create a new error handler from a given function
-    pub fn new<F>(handler: F) -> Self
-    where
-        F: Fn(MetricsError) + Send + Sync + 'static,
-    {
-        ErrorHandler(Arc::new(handler))
-    }
-}
-
 /// Creates a new accumulator builder
 pub fn accumulator(integrator: Arc<dyn Integrator + Send + Sync>) -> AccumulatorBuilder {
     AccumulatorBuilder {
         integrator,
-        error_handler: None,
         resource: None,
     }
 }
@@ -68,19 +38,10 @@ pub fn accumulator(integrator: Arc<dyn Integrator + Send + Sync>) -> Accumulator
 #[derive(Debug)]
 pub struct AccumulatorBuilder {
     integrator: Arc<dyn Integrator + Send + Sync>,
-    error_handler: Option<ErrorHandler>,
     resource: Option<Resource>,
 }
 
 impl AccumulatorBuilder {
-    /// Set the accumulator error handler function.
-    pub fn with_error_handler(self, error_handler: ErrorHandler) -> Self {
-        AccumulatorBuilder {
-            error_handler: Some(error_handler),
-            ..self
-        }
-    }
-
     /// The resource that will be applied to all records in this accumulator.
     pub fn with_resource(self, resource: Resource) -> Self {
         AccumulatorBuilder {
@@ -93,7 +54,6 @@ impl AccumulatorBuilder {
     pub fn build(self) -> Accumulator {
         Accumulator(Arc::new(AccumulatorCore::new(
             self.integrator,
-            self.error_handler,
             self.resource.unwrap_or_default(),
         )))
     }
@@ -169,24 +129,17 @@ struct AccumulatorCore {
     current_epoch: Number,
     /// THe configured integrator.
     integrator: Arc<dyn Integrator + Send + Sync>,
-    /// The user-defined error handler.
-    error_handler: Option<ErrorHandler>,
     /// The resource applied to all records in this Accumulator.
     resource: Resource,
 }
 
 impl AccumulatorCore {
-    fn new(
-        integrator: Arc<dyn Integrator + Send + Sync>,
-        error_handler: Option<ErrorHandler>,
-        resource: Resource,
-    ) -> Self {
+    fn new(integrator: Arc<dyn Integrator + Send + Sync>, resource: Resource) -> Self {
         AccumulatorCore {
             current: flurry::HashMap::new(),
             async_instruments: Mutex::new(AsyncInstrumentState::default()),
             current_epoch: NumberKind::U64.zero(),
             integrator,
-            error_handler,
             resource,
         }
     }
@@ -198,7 +151,7 @@ impl AccumulatorCore {
     ) -> Result<()> {
         self.async_instruments
             .lock()
-            .map_err(|lock_err| MetricsError::Other(lock_err.to_string()))
+            .map_err(Into::into)
             .map(|mut async_instruments| {
                 async_instruments.runners.push((runner, instrument));
             })
@@ -273,10 +226,7 @@ impl AccumulatorCore {
         if let (Some(current), Some(checkpoint)) = (&record.current, &record.checkpoint) {
             if let Err(err) = current.synchronized_copy(checkpoint, record.instrument.descriptor())
             {
-                // FIXME: move to global error handler
-                if let Some(handler) = &self.error_handler {
-                    handler.call(err)
-                }
+                global::handle(err);
 
                 return 0;
             }
@@ -288,10 +238,7 @@ impl AccumulatorCore {
                 &checkpoint,
             );
             if let Err(err) = locked_integrator.process(export_record) {
-                // FIXME: move to global error handler
-                if let Some(handler) = &self.error_handler {
-                    handler.call(err)
-                }
+                global::handle(err);
             }
 
             1
@@ -324,10 +271,7 @@ impl AccumulatorCore {
                                 );
 
                                 if let Err(err) = locked_integrator.process(export_record) {
-                                    // FIXME: move to global error handler
-                                    if let Some(handler) = &self.error_handler {
-                                        handler.call(err)
-                                    }
+                                    global::handle(err);
                                 }
                                 checkpointed += 1;
                             }
@@ -443,15 +387,11 @@ struct AsyncInstrument {
 impl AsyncInstrument {
     fn observe(&self, number: &Number, labels: &labels::Set) {
         if let Err(err) = aggregators::range_test(number, &self.instrument.descriptor) {
-            if let Some(error_handler) = self.instrument.meter.0.error_handler.as_ref() {
-                error_handler.call(err)
-            }
+            global::handle(err);
         }
         if let Some(recorder) = self.get_recorder(labels) {
             if let Err(err) = recorder.update(number, &self.instrument.descriptor) {
-                if let Some(error_handler) = self.instrument.meter.0.error_handler.as_ref() {
-                    error_handler.call(err)
-                }
+                global::handle(err)
             }
         }
     }
@@ -567,9 +507,7 @@ impl sdk_api::SyncBoundInstrumentCore for Record {
             .and_then(|_| {
                 recorder.update_with_context(cx, &number, &self.instrument.instrument.descriptor)
             }) {
-                if let Some(error_handler) = &self.instrument.instrument.meter.0.error_handler {
-                    error_handler.call(err);
-                }
+                global::handle(err);
                 return;
             }
 

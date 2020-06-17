@@ -69,10 +69,14 @@
 //! [trait objects]: https://doc.rust-lang.org/reference/types/trait-object.html#trait-objects
 
 #[cfg(feature = "metrics")]
+mod error_handler;
+#[cfg(feature = "metrics")]
 mod metrics;
 #[cfg(feature = "trace")]
 mod trace;
 
+#[cfg(feature = "metrics")]
+pub use error_handler::{handle, set_handler};
 #[cfg(feature = "metrics")]
 pub use metrics::{meter, meter_provider, set_meter_provider};
 #[cfg(feature = "trace")]

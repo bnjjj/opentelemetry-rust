@@ -14,7 +14,6 @@ use crate::sdk::{
         },
         controllers::{self, PushController, PushControllerWorker},
         selectors::simple,
-        ErrorHandler,
     },
 };
 use futures::Stream;
@@ -249,7 +248,6 @@ pub struct StdoutExporterBuilder<W, S, I> {
     quantiles: Option<Vec<f64>>,
     label_encoder: Option<Box<dyn labels::Encoder + Send + Sync>>,
     period: Option<Duration>,
-    error_handler: Option<ErrorHandler>,
     formatter: Option<Formatter>,
 }
 
@@ -270,7 +268,6 @@ where
             quantiles: None,
             label_encoder: None,
             period: None,
-            error_handler: None,
             formatter: None,
         }
     }
@@ -285,7 +282,6 @@ where
             quantiles: self.quantiles,
             label_encoder: self.label_encoder,
             period: self.period,
-            error_handler: self.error_handler,
             formatter: self.formatter,
         }
     }
@@ -333,17 +329,6 @@ where
         }
     }
 
-    /// Configure the error handler to be used by this pipeline
-    pub fn with_error_handler<T>(self, handler: T) -> Self
-    where
-        T: Fn(MetricsError) + Send + Sync + 'static,
-    {
-        StdoutExporterBuilder {
-            error_handler: Some(ErrorHandler::new(handler)),
-            ..self
-        }
-    }
-
     /// Set a formatter for serializing export batch data
     pub fn with_formatter<T>(self, formatter: T) -> Self
     where
@@ -358,7 +343,6 @@ where
     /// Build a new push controller, returning errors if they arise.
     pub fn try_init(mut self) -> metrics::Result<PushController> {
         let period = self.period.take();
-        let error_handler = self.error_handler.take();
         let (spawn, interval, exporter) = self.try_build()?;
         let mut push_builder =
             controllers::push(simple::Selector::Exact, exporter, spawn, interval)
@@ -367,9 +351,6 @@ where
             push_builder = push_builder.with_period(period);
         }
 
-        if let Some(error_handler) = error_handler {
-            push_builder = push_builder.with_error_handler(error_handler);
-        }
         let controller = push_builder.build();
         global::set_meter_provider(controller.provider());
         Ok(controller)

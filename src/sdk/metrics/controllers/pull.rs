@@ -1,10 +1,11 @@
-use crate::api::metrics::{registry, MetricsError, Result};
+use crate::api::metrics::{registry, Result};
+use crate::global;
 use crate::sdk::{
     export::metrics::{AggregationSelector, CheckpointSet, LockedIntegrator, Record},
     metrics::{
         accumulator,
         integrators::{self, SimpleIntegrator},
-        Accumulator, ErrorHandler,
+        Accumulator,
     },
     Resource,
 };
@@ -26,7 +27,6 @@ pub struct PullController {
     provider: registry::RegistryMeterProvider,
     period: Duration,
     last_collect: SystemTime,
-    error_handler: Option<ErrorHandler>,
 }
 
 impl PullController {
@@ -46,11 +46,7 @@ impl PullController {
                 Ok(mut locked_integrator) => {
                     self.accumulator.0.collect(&mut locked_integrator);
                 }
-                Err(err) => {
-                    if let Some(error_handler) = self.error_handler.as_ref() {
-                        error_handler.call(err);
-                    }
-                }
+                Err(err) => global::handle(err),
             }
         }
     }
@@ -86,9 +82,6 @@ pub struct PullControllerBuilder {
     /// If the period is zero, caching of the result is disabled. The default value
     /// is 10 seconds.
     cache_period: Option<Duration>,
-
-    /// Error handler to use for this controller
-    error_handler: Option<ErrorHandler>,
 }
 
 impl PullControllerBuilder {
@@ -99,7 +92,6 @@ impl PullControllerBuilder {
             resource: None,
             stateful: false,
             cache_period: None,
-            error_handler: None,
         }
     }
 
@@ -124,17 +116,6 @@ impl PullControllerBuilder {
         PullControllerBuilder { stateful, ..self }
     }
 
-    /// Configure the error handler this controller will use
-    pub fn with_error_handler<T>(self, f: T) -> Self
-    where
-        T: Fn(MetricsError) + Send + Sync + 'static,
-    {
-        PullControllerBuilder {
-            error_handler: Some(ErrorHandler::new(f)),
-            ..self
-        }
-    }
-
     /// Build a new `PushController` from the current configuration.
     pub fn build(self) -> PullController {
         let integrator = Arc::new(integrators::simple(self.selector, self.stateful));
@@ -150,7 +131,6 @@ impl PullControllerBuilder {
             provider,
             period: self.cache_period.unwrap_or(DEFAULT_CACHE_DURATION),
             last_collect: SystemTime::now(),
-            error_handler: self.error_handler,
         }
     }
 }

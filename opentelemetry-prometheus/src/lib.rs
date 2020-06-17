@@ -154,9 +154,9 @@ impl ExporterBuilder {
         }
     }
 
-    /// Sets up a complete export pipeline with the recommended setup,
-    /// using the recommended selector and standard integrator.  See the pull.Options.
-    pub fn init(self) -> PrometheusExporter {
+    /// Sets up a complete export pipeline with the recommended setup, using the
+    /// recommended selector and standard integrator.
+    pub fn try_init(self) -> Result<PrometheusExporter, MetricsError> {
         let registry = self.registry.unwrap_or_else(prometheus::Registry::new);
         let default_summary_quantiles = self
             .default_summary_quantiles
@@ -167,8 +167,7 @@ impl ExporterBuilder {
         let selector = Box::new(Selector::Histogram(default_histogram_boundaries.clone()));
         let mut controller_builder = controllers::pull(selector)
             .with_stateful(true)
-            .with_cache_period(self.cache_period.unwrap_or(DEFAULT_CACHE_PERIOD))
-            .with_error_handler(|err| eprintln!("ERROR: {:?}", err));
+            .with_cache_period(self.cache_period.unwrap_or(DEFAULT_CACHE_PERIOD));
         if let Some(resource) = self.resource {
             controller_builder = controller_builder.with_resource(resource);
         }
@@ -182,6 +181,16 @@ impl ExporterBuilder {
             default_summary_quantiles,
             default_histogram_boundaries,
         )
+    }
+
+    /// Sets up a complete export pipeline with the recommended setup, using the
+    /// recommended selector and standard integrator.
+    ///
+    /// # Panics
+    ///
+    /// This panics if the exporter cannot be registered in the prometheus registry.
+    pub fn init(self) -> PrometheusExporter {
+        self.try_init().unwrap()
     }
 }
 
@@ -204,17 +213,19 @@ impl PrometheusExporter {
         controller: PullController,
         default_summary_quantiles: Vec<f64>,
         default_histogram_boundaries: Vec<f64>,
-    ) -> Self {
+    ) -> Result<Self, MetricsError> {
         let controller = Arc::new(Mutex::new(controller));
         let collector = Collector::with_controller(controller.clone());
-        // FIXME: return result instead
-        let _ = registry.register(Box::new(collector));
-        PrometheusExporter {
+        registry
+            .register(Box::new(collector))
+            .map_err(|e| MetricsError::Other(e.to_string()))?;
+
+        Ok(PrometheusExporter {
             registry,
             controller,
             default_summary_quantiles,
             default_histogram_boundaries,
-        }
+        })
     }
 
     /// Returns a reference to the current prometheus registry.
@@ -253,8 +264,7 @@ impl prometheus::core::Collector for Collector {
             controller.collect();
             let mut metrics = Vec::new();
 
-            // FIXME: handle errors here instead of ignoring
-            let _ = controller.try_for_each(&mut |record| {
+            if let Err(err) = controller.try_for_each(&mut |record| {
                 let agg = record.aggregator();
                 let number_kind = record.descriptor().number_kind();
 
@@ -271,7 +281,9 @@ impl prometheus::core::Collector for Collector {
                 }
 
                 Ok(())
-            });
+            }) {
+                global::handle(err);
+            }
 
             metrics
         } else {
